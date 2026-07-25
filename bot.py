@@ -156,6 +156,8 @@ def settings(message):
     markup = telebot.types.InlineKeyboardMarkup()
     markup.add(telebot.types.InlineKeyboardButton("💳 Кредит өзгертиў", callback_data="set_credit"))
     markup.add(telebot.types.InlineKeyboardButton("🏠 Тұрақлы харажат өзгертиў", callback_data="set_fixed"))
+    markup.add(telebot.types.InlineKeyboardButton("➕ Таза кредит қосыў", callback_data="add_credit"))
+    markup.add(telebot.types.InlineKeyboardButton("➕ Таза тұрақлы қосыў", callback_data="add_fixed"))
     bot.send_message(message.chat.id, "⚙️ Не өзгертесиз?", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "set_credit")
@@ -247,6 +249,88 @@ def save_fixed_day(message, fid, amount):
         conn.close()
         bot.send_message(message.chat.id,
                          f"✅ Тазаланды!\n"
+                         f"• Сумма: {amount:,.0f} сум\n"
+                         f"• Төлем күни: {day}-күн")
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
+
+# ➕ Таза кредит қосыў
+@bot.callback_query_handler(func=lambda call: call.data == "add_credit")
+def add_credit_start(call):
+    msg = bot.send_message(call.message.chat.id, "Таза кредит атын жаз:\nМысалы: Kaspi кредит")
+    bot.register_next_step_handler(msg, add_credit_name)
+
+def add_credit_name(message):
+    name = message.text.strip()
+    if not name:
+        bot.send_message(message.chat.id, "❌ Аты бос болмасын!")
+        return
+    msg = bot.send_message(message.chat.id, f"💳 {name} суммасын жаз (сум):\nМысалы: 500000")
+    bot.register_next_step_handler(msg, add_credit_amount, name)
+
+def add_credit_amount(message, name):
+    try:
+        amount = float(message.text.replace(",", "").replace(" ", ""))
+        msg = bot.send_message(message.chat.id, "Төлем число күнин жаз (1-31):\nМысалы: 10")
+        bot.register_next_step_handler(msg, add_credit_day, name, amount)
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
+
+def add_credit_day(message, name, amount):
+    try:
+        day = int(message.text.strip())
+        if not 1 <= day <= 31:
+            raise ValueError
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("INSERT INTO credits (name, amount, pay_day, is_active) VALUES (%s,%s,%s,1)",
+                  (name, amount, day))
+        conn.commit()
+        conn.close()
+        bot.send_message(message.chat.id,
+                         f"✅ Таза кредит қосылды!\n"
+                         f"• Аты: {name}\n"
+                         f"• Сумма: {amount:,.0f} сум\n"
+                         f"• Төлем күни: {day}-күн")
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
+
+# ➕ Таза тұрақлы харажат қосыў
+@bot.callback_query_handler(func=lambda call: call.data == "add_fixed")
+def add_fixed_start(call):
+    msg = bot.send_message(call.message.chat.id, "Таза тұрақлы харажат атын жаз:\nМысалы: Интернет")
+    bot.register_next_step_handler(msg, add_fixed_name)
+
+def add_fixed_name(message):
+    name = message.text.strip()
+    if not name:
+        bot.send_message(message.chat.id, "❌ Аты бос болмасын!")
+        return
+    msg = bot.send_message(message.chat.id, f"🏠 {name} суммасын жаз (сум):\nМысалы: 200000")
+    bot.register_next_step_handler(msg, add_fixed_amount, name)
+
+def add_fixed_amount(message, name):
+    try:
+        amount = float(message.text.replace(",", "").replace(" ", ""))
+        msg = bot.send_message(message.chat.id, "Төлем число күнин жаз (1-31):\nМысалы: 5")
+        bot.register_next_step_handler(msg, add_fixed_day, name, amount)
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
+
+def add_fixed_day(message, name, amount):
+    try:
+        day = int(message.text.strip())
+        if not 1 <= day <= 31:
+            raise ValueError
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("INSERT INTO fixed_expenses (name, amount, pay_day, is_active) VALUES (%s,%s,%s,1)",
+                  (name, amount, day))
+        conn.commit()
+        conn.close()
+        bot.send_message(message.chat.id,
+                         f"✅ Таза тұрақлы харажат қосылды!\n"
+                         f"• Ат: {name}\n"
                          f"• Сумма: {amount:,.0f} сум\n"
                          f"• Төлем күни: {day}-күн")
     except ValueError:
