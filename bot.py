@@ -112,41 +112,41 @@ def dashboard(message):
             next_month = today.month + 1 if today.month < 12 else 1
             return months_kk[next_month]
 
-    text = "🔴 Кредитлер:\n"
+    text = "🔴 <b>Кредитлер:</b>\n"
     for cid, name, amount, pay_day in credits:
         amount = float(amount)
         if cid in paid_credit_ids:
-            text += f"  • {name}: {amount:,.0f} сум ✅\n"
+            text += f"  • {name}: <b>{amount:,.0f} сум</b> ✅\n"
         else:
-            text += f"  • {name}: {amount:,.0f} сум ({pay_day}-{get_payment_month(pay_day)})\n"
+            text += f"  • {name}: <b>{amount:,.0f} сум</b> ({pay_day}-{get_payment_month(pay_day)})\n"
 
-    text += "\n🟡 Тұрақлы харажатлар:\n"
+    text += "\n🟡 <b>Тұрақлы харажатлар:</b>\n"
     for fid, name, amount, pay_day in fixed:
         amount = float(amount)
         if fid in paid_fixed_ids:
-            text += f"  • {name}: {amount:,.0f} сум ✅\n"
+            text += f"  • {name}: <b>{amount:,.0f} сум</b> ✅\n"
         else:
-            text += f"  • {name}: {amount:,.0f} сум ({pay_day}-{get_payment_month(pay_day)})\n"
+            text += f"  • {name}: <b>{amount:,.0f} сум</b> ({pay_day}-{get_payment_month(pay_day)})\n"
 
     if other_by_cat:
-        text += "\n🟢 Басқа харажатлар:\n"
+        text += "\n🟢 <b>Басқа харажатлар:</b>\n"
         for cat, amt in other_by_cat:
-            text += f"  • {cat}: {float(amt):,.0f} сум\n"
+            text += f"  • {cat}: <b>{float(amt):,.0f} сум</b>\n"
 
-    text += f"\n📊 Ойласылған: -{planned_total:,.0f} сум\n"
-    text += f"✅ Төленген: -{paid_total:,.0f} сум\n"
+    text += f"\n📊 Ойласылған: <b>-{planned_total:,.0f} сум</b>\n"
+    text += f"✅ Төленген: <b>-{paid_total:,.0f} сум</b>\n"
     text += f"\n──────────────────\n"
-    text += f"💰 Қолда бар: {remaining:,.0f} сум\n"
+    text += f"💰 Қолда бар: <b>{remaining:,.0f} сум</b>\n"
 
     after_planned = month_budget - planned_total - other
     if after_planned >= 0:
-        text += f"📉 Барлығын төлесе қалады: {after_planned:,.0f} сум\n"
+        text += f"📉 Барлығын төлесе қалады: <b>{after_planned:,.0f} сум</b>\n"
     else:
-        text += f"⚠️ Барлығын төлеуге жетиспейди: {after_planned:,.0f} сум\n"
+        text += f"⚠️ Барлығын төлеуге жетиспейди: <b>{after_planned:,.0f} сум</b>\n"
 
-    text += f"\n💼 Семьяда айланған бюджет: {month_budget:,.0f} сум"
+    text += f"\n💼 Семьяда айланған бюджет: <b>{month_budget:,.0f} сум</b>"
 
-    bot.send_message(message.chat.id, text, reply_markup=main_menu())
+    bot.send_message(message.chat.id, text, reply_markup=main_menu(), parse_mode='HTML')
 
 @bot.message_handler(func=lambda m: m.text == "⚙️ Өзгертиў")
 def settings(message):
@@ -202,8 +202,9 @@ def save_credit_day(message, cid, amount):
         conn.close()
         bot.send_message(message.chat.id,
                          f"✅ Тазаланды!\n"
-                         f"• Сумма: {amount:,.0f} сум\n"
-                         f"• Төлем число күни: {day}-күн")
+                         f"• Сумма: <b>{amount:,.0f} сум</b>\n"
+                         f"• Төлем күни: {day}-күн",
+                         parse_mode='HTML')
     except ValueError:
         bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
 
@@ -249,12 +250,12 @@ def save_fixed_day(message, fid, amount):
         conn.close()
         bot.send_message(message.chat.id,
                          f"✅ Тазаланды!\n"
-                         f"• Сумма: {amount:,.0f} сум\n"
-                         f"• Төлем күни: {day}-күн")
+                         f"• Сумма: <b>{amount:,.0f} сум</b>\n"
+                         f"• Төлем күни: {day}-күн",
+                         parse_mode='HTML')
     except ValueError:
         bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
 
-# ➕ Таза кредит қосыў
 @bot.callback_query_handler(func=lambda call: call.data == "add_credit")
 def add_credit_start(call):
     msg = bot.send_message(call.message.chat.id, "Таза кредит атын жаз:\nМысалы: Kaspi кредит")
@@ -289,13 +290,13 @@ def add_credit_day(message, name, amount):
         conn.close()
         bot.send_message(message.chat.id,
                          f"✅ Таза кредит қосылды!\n"
-                         f"• Аты: {name}\n"
-                         f"• Сумма: {amount:,.0f} сум\n"
-                         f"• Төлем күни: {day}-күн")
+                         f"• Ат: {name}\n"
+                         f"• Сумма: <b>{amount:,.0f} сум</b>\n"
+                         f"• Төлем күни: {day}-күн",
+                         parse_mode='HTML')
     except ValueError:
         bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
 
-# ➕ Таза тұрақлы харажат қосыў
 @bot.callback_query_handler(func=lambda call: call.data == "add_fixed")
 def add_fixed_start(call):
     msg = bot.send_message(call.message.chat.id, "Таза тұрақлы харажат атын жаз:\nМысалы: Интернет")
@@ -331,8 +332,9 @@ def add_fixed_day(message, name, amount):
         bot.send_message(message.chat.id,
                          f"✅ Таза тұрақлы харажат қосылды!\n"
                          f"• Ат: {name}\n"
-                         f"• Сумма: {amount:,.0f} сум\n"
-                         f"• Төлем күни: {day}-күн")
+                         f"• Сумма: <b>{amount:,.0f} сум</b>\n"
+                         f"• Төлем күни: {day}-күн",
+                         parse_mode='HTML')
     except ValueError:
         bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
 
