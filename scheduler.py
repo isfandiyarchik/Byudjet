@@ -12,7 +12,7 @@ def start_scheduler(bot, admin_id):
                       args=[bot, admin_id])
     scheduler.add_job(monthly_payment_reminder, 'cron', day=1, hour=9, minute=0,
                       args=[bot, admin_id])
-    scheduler.add_job(morning_summary, 'cron', hour=8, minute=30,
+    scheduler.add_job(morning_summary, 'cron', hour=8, minute=0,
                       args=[bot])
     scheduler.start()
     print("✅ Scheduler иске қосылды! (Asia/Tashkent)")
@@ -24,8 +24,7 @@ def morning_summary(bot):
 
     month = datetime.now(UZ_TZ).strftime("%Y-%m")
 
-    c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
-              (f"{month}%",))
+    c.execute("SELECT COALESCE(SUM(amount),0) FROM budget")
     month_budget = float(c.fetchone()[0])
 
     c.execute("SELECT id, name, amount, pay_day FROM credits WHERE is_active=1")
@@ -37,6 +36,10 @@ def morning_summary(bot):
     c.execute("SELECT COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s",
               (f"{month}%",))
     other = float(c.fetchone()[0])
+
+    c.execute("SELECT category, COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s GROUP BY category",
+              (f"{month}%",))
+    other_by_cat = c.fetchall()
 
     c.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE month=%s AND status='paid'",
               (month,))
@@ -58,7 +61,6 @@ def morning_summary(bot):
     fixed_total = sum(float(a) for _, _, a, _ in fixed)
     planned_total = credit_total + fixed_total
     remaining = month_budget - paid_total - other
-    after_planned = month_budget - planned_total - other
 
     months_kk = {
         1: "январь", 2: "февраль", 3: "март", 4: "апрель",
@@ -74,38 +76,45 @@ def morning_summary(bot):
             next_month = today.month + 1 if today.month < 12 else 1
             return months_kk[next_month]
 
-    text = "🌅 Қайырлы таң!\n\n"
-    text += f"💼 Семьяда айланған бюджет: {month_budget:,.0f} сум\n"
-    text += f"💰 Қолда бар: {remaining:,.0f} сум\n\n"
+    text = "🌅 <b>Қайырлы таң!</b>\n\n"
 
-    text += "🔴 Кредитлер:\n"
+    text += "🔴 <b>Кредитлер:</b>\n"
     for cid, name, amount, pay_day in credits:
         amount = float(amount)
         if cid in paid_credit_ids:
-            text += f"  • {name}: {amount:,.0f} сум ✅\n"
+            text += f"  • {name}: <b>{amount:,.0f} сум</b> ✅\n"
         else:
-            text += f"  • {name}: {amount:,.0f} сум ({pay_day}-{get_payment_month(pay_day)})\n"
+            text += f"  • {name}: <b>{amount:,.0f} сум</b> ({pay_day}-{get_payment_month(pay_day)})\n"
 
-    text += "\n🟡 Тұрақлы харажатлар:\n"
+    text += "\n🟡 <b>Тұрақлы харажатлар:</b>\n"
     for fid, name, amount, pay_day in fixed:
         amount = float(amount)
         if fid in paid_fixed_ids:
-            text += f"  • {name}: {amount:,.0f} сум ✅\n"
+            text += f"  • {name}: <b>{amount:,.0f} сум</b> ✅\n"
         else:
-            text += f"  • {name}: {amount:,.0f} сум ({pay_day}-{get_payment_month(pay_day)})\n"
+            text += f"  • {name}: <b>{amount:,.0f} сум</b> ({pay_day}-{get_payment_month(pay_day)})\n"
 
-    text += f"\n📊 Ойласылған: -{planned_total:,.0f} сум\n"
-    text += f"✅ Төленген: -{paid_total:,.0f} сум\n"
+    if other_by_cat:
+        text += "\n🟢 <b>Басқа харажатлар:</b>\n"
+        for cat, amt in other_by_cat:
+            text += f"  • {cat}: <b>{float(amt):,.0f} сум</b>\n"
+
+    text += f"\n📊 Ойласылған: <b>-{planned_total:,.0f} сум</b>\n"
+    text += f"✅ Төленген: <b>-{paid_total:,.0f} сум</b>\n"
     text += f"\n──────────────────\n"
+    text += f"💰 Қолда бар: <b>{remaining:,.0f} сум</b>\n"
 
+    after_planned = month_budget - planned_total - other
     if after_planned >= 0:
-        text += f"📉 Барлығын төлесе қалады: {after_planned:,.0f} сум"
+        text += f"📉 Барлығын төлесе қалады: <b>{after_planned:,.0f} сум</b>\n"
     else:
-        text += f"⚠️ Барлығын төлеуге жетпейди: {after_planned:,.0f} сум"
+        text += f"⚠️ Барлығын төлеуге жетиспейди: <b>{after_planned:,.0f} сум</b>\n"
+
+    text += f"\n💼 Семьяда айланған бюджет: <b>{month_budget:,.0f} сум</b>"
 
     for (telegram_id,) in users:
         try:
-            bot.send_message(telegram_id, text)
+            bot.send_message(telegram_id, text, parse_mode='HTML')
             print(f"✅ Таңертең хабар жиберилди: {telegram_id}")
         except Exception as e:
             print(f"❌ Қате: {e}")
@@ -139,14 +148,14 @@ def check_credit_reminders(bot, admin_id):
         }
         cur_month = months_kk[today.month]
 
-        text = "🔔 2 күннен соң төлем!\n\n"
+        text = "🔔 <b>2 күннен соң төлем!</b>\n\n"
         for name, amount, pay_day in reminders:
-            text += f"• {name}: {float(amount):,.0f} сум\n"
+            text += f"• {name}: <b>{float(amount):,.0f} сум</b>\n"
             text += f"  Төлем күни: {pay_day}-{cur_month}\n\n"
 
         for (telegram_id,) in users:
             try:
-                bot.send_message(telegram_id, text)
+                bot.send_message(telegram_id, text, parse_mode='HTML')
                 print(f"✅ Хабар жиберилди: {telegram_id}")
             except Exception as e:
                 print(f"❌ Қате: {e}")
@@ -164,17 +173,17 @@ def monthly_payment_reminder(bot, admin_id):
     conn.close()
 
     markup = telebot.types.InlineKeyboardMarkup()
-    text = "📅 Таза ай басланды!\nТөлемлерди раслаң:\n\n"
+    text = "📅 <b>Таза ай басланды!</b>\nТөлемлерди раслаң:\n\n"
 
     for cid, name, amount in credits:
-        text += f"💳 {name}: {float(amount):,.0f} сум\n"
+        text += f"💳 {name}: <b>{float(amount):,.0f} сум</b>\n"
         markup.add(telebot.types.InlineKeyboardButton(
             f"✅ {name} төледим",
             callback_data=f"pc_{cid}"
         ))
 
     for fid, name, amount in fixed:
-        text += f"🏠 {name}: {float(amount):,.0f} сум\n"
+        text += f"🏠 {name}: <b>{float(amount):,.0f} сум</b>\n"
         markup.add(telebot.types.InlineKeyboardButton(
             f"✅ {name} төледим",
             callback_data=f"pf_{fid}"
@@ -182,7 +191,7 @@ def monthly_payment_reminder(bot, admin_id):
 
     for (telegram_id,) in users:
         try:
-            bot.send_message(telegram_id, text, reply_markup=markup)
+            bot.send_message(telegram_id, text, reply_markup=markup, parse_mode='HTML')
             print(f"✅ Ай басы хабары жиберилди: {telegram_id}")
         except Exception as e:
             print(f"❌ Қате: {e}")
