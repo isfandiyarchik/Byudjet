@@ -1,6 +1,5 @@
 import telebot
 import os
-import threading
 from flask import Flask, request
 from dotenv import load_dotenv
 from datetime import datetime
@@ -61,8 +60,8 @@ def dashboard(message):
 
     month = datetime.now().strftime("%Y-%m")
 
-    c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
-              (f"{month}%",))
+    # Барлық айлардың жиынтық бюджеті
+    c.execute("SELECT COALESCE(SUM(amount),0) FROM budget")
     month_budget = float(c.fetchone()[0])
 
     c.execute("SELECT id, name, amount, pay_day FROM credits WHERE is_active=1")
@@ -95,8 +94,7 @@ def dashboard(message):
 
     credit_total = sum(float(a) for _, _, a, _ in credits)
     fixed_total = sum(float(a) for _, _, a, _ in fixed)
-    planned_total = credit_total + fixed_total
-    remaining = month_budget - paid_total - other
+    remaining = month_budget - credit_total - fixed_total - other
 
     months_kk = {
         1: "январь", 2: "февраль", 3: "март", 4: "апрель",
@@ -112,7 +110,9 @@ def dashboard(message):
             next_month = today.month + 1 if today.month < 12 else 1
             return months_kk[next_month]
 
-    text = "🔴 <b>Кредитлер:</b>\n"
+    text = f"💼 Семьяда айланған бюджет: <b>{month_budget:,.0f} сум</b>\n\n"
+
+    text += "🔴 <b>Кредитлер:</b>\n"
     for cid, name, amount, pay_day in credits:
         amount = float(amount)
         if cid in paid_credit_ids:
@@ -133,18 +133,8 @@ def dashboard(message):
         for cat, amt in other_by_cat:
             text += f"  • {cat}: <b>{float(amt):,.0f} сум</b>\n"
 
-    text += f"\n📊 Ойласылған: <b>-{planned_total:,.0f} сум</b>\n"
-    text += f"✅ Төленген: <b>-{paid_total:,.0f} сум</b>\n"
     text += f"\n──────────────────\n"
-    text += f"💰 Қолда бар: <b>{remaining:,.0f} сум</b>\n"
-
-    after_planned = month_budget - planned_total - other
-    if after_planned >= 0:
-        text += f"📉 Барлығын төлесе қалады: <b>{after_planned:,.0f} сум</b>\n"
-    else:
-        text += f"⚠️ Барлығын төлеуге жетиспейди: <b>{after_planned:,.0f} сум</b>\n"
-
-    text += f"\n💼 Семьяда айланған бюджет: <b>{month_budget:,.0f} сум</b>"
+    text += f"💰 Қолда бар: <b>{remaining:,.0f} сум</b>"
 
     bot.send_message(message.chat.id, text, reply_markup=main_menu(), parse_mode='HTML')
 
@@ -290,7 +280,7 @@ def add_credit_day(message, name, amount):
         conn.close()
         bot.send_message(message.chat.id,
                          f"✅ Таза кредит қосылды!\n"
-                         f"• Ат: {name}\n"
+                         f"• Аты: {name}\n"
                          f"• Сумма: <b>{amount:,.0f} сум</b>\n"
                          f"• Төлем күни: {day}-күн",
                          parse_mode='HTML')
@@ -331,7 +321,7 @@ def add_fixed_day(message, name, amount):
         conn.close()
         bot.send_message(message.chat.id,
                          f"✅ Таза тұрақлы харажат қосылды!\n"
-                         f"• Ат: {name}\n"
+                         f"• Аты: {name}\n"
                          f"• Сумма: <b>{amount:,.0f} сум</b>\n"
                          f"• Төлем күни: {day}-күн",
                          parse_mode='HTML')
