@@ -146,12 +146,18 @@ def check_credit_reminders(bot, admin_id):
             5: "май", 6: "июнь", 7: "июль", 8: "август",
             9: "сентябрь", 10: "октябрь", 11: "ноябрь", 12: "декабрь"
         }
-        cur_month = months_kk[today.month]
+
+        def get_remind_month(pay_day):
+            if pay_day >= today.day:
+                return months_kk[today.month]
+            else:
+                next_month = today.month + 1 if today.month < 12 else 1
+                return months_kk[next_month]
 
         text = "🔔 <b>2 күннен соң төлем!</b>\n\n"
         for name, amount, pay_day in reminders:
             text += f"• {name}: <b>{float(amount):,.0f} сум</b>\n"
-            text += f"  Төлем күни: {pay_day}-{cur_month}\n\n"
+            text += f"  Төлем күни: {pay_day}-{get_remind_month(pay_day)}\n\n"
 
         for (telegram_id,) in users:
             try:
