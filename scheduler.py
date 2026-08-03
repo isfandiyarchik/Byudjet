@@ -24,6 +24,7 @@ def morning_summary(bot):
 
     month = datetime.now(UZ_TZ).strftime("%Y-%m")
 
+    # Барлық айлардың жиынтық бюджеті
     c.execute("SELECT COALESCE(SUM(amount),0) FROM budget")
     month_budget = float(c.fetchone()[0])
 
@@ -57,9 +58,7 @@ def morning_summary(bot):
     users = c.fetchall()
     conn.close()
 
-    credit_total = sum(float(a) for _, _, a, _ in credits)
-    fixed_total = sum(float(a) for _, _, a, _ in fixed)
-    planned_total = credit_total + fixed_total
+    # Қолда бар = барлық бюджет - төленген - басқа харажатлар
     remaining = month_budget - paid_total - other
 
     months_kk = {
@@ -77,6 +76,7 @@ def morning_summary(bot):
             return months_kk[next_month]
 
     text = "🌅 <b>Қайырлы таң!</b>\n\n"
+    text += f"💼 Семьяда айланған бюджет: <b>{month_budget:,.0f} сум</b>\n\n"
 
     text += "🔴 <b>Кредитлер:</b>\n"
     for cid, name, amount, pay_day in credits:
@@ -99,18 +99,8 @@ def morning_summary(bot):
         for cat, amt in other_by_cat:
             text += f"  • {cat}: <b>{float(amt):,.0f} сум</b>\n"
 
-    text += f"\n📊 Ойласылған: <b>-{planned_total:,.0f} сум</b>\n"
-    text += f"✅ Төленген: <b>-{paid_total:,.0f} сум</b>\n"
     text += f"\n──────────────────\n"
-    text += f"💰 Қолда бар: <b>{remaining:,.0f} сум</b>\n"
-
-    after_planned = month_budget - planned_total - other
-    if after_planned >= 0:
-        text += f"📉 Барлығын төлесе қалады: <b>{after_planned:,.0f} сум</b>\n"
-    else:
-        text += f"⚠️ Барлығын төлеуге жетиспейди: <b>{after_planned:,.0f} сум</b>\n"
-
-    text += f"\n💼 Семьяда айланған бюджет: <b>{month_budget:,.0f} сум</b>"
+    text += f"💰 Қолда бар: <b>{remaining:,.0f} сум</b>"
 
     for (telegram_id,) in users:
         try:
@@ -154,7 +144,7 @@ def check_credit_reminders(bot, admin_id):
                 next_month = today.month + 1 if today.month < 12 else 1
                 return months_kk[next_month]
 
-        text = "🔔 <b>2 күннен соң төлем!</b>\n\n"
+        text = "🔔 <b>2 күннен кейин төлем!</b>\n\n"
         for name, amount, pay_day in reminders:
             text += f"• {name}: <b>{float(amount):,.0f} сум</b>\n"
             text += f"  Төлем күни: {pay_day}-{get_remind_month(pay_day)}\n\n"
