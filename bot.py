@@ -92,9 +92,8 @@ def dashboard(message):
 
     conn.close()
 
-    credit_total = sum(float(a) for _, _, a, _ in credits)
-    fixed_total = sum(float(a) for _, _, a, _ in fixed)
-    remaining = month_budget - credit_total - fixed_total - other
+    # Қолда бар = барлық бюджет - төленген - басқа харажатлар
+    remaining = month_budget - paid_total - other
 
     months_kk = {
         1: "январь", 2: "февраль", 3: "март", 4: "апрель",
