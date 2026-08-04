@@ -12,7 +12,7 @@ def start_scheduler(bot, admin_id):
                       args=[bot, admin_id])
     scheduler.add_job(monthly_payment_reminder, 'cron', day=1, hour=9, minute=0,
                       args=[bot, admin_id])
-    scheduler.add_job(morning_summary, 'cron', hour=8, minute=0,
+    scheduler.add_job(morning_summary, 'cron', hour=8, minute=30,
                       args=[bot])
     scheduler.start()
     print("✅ Scheduler иске қосылды! (Asia/Tashkent)")
