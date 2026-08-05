@@ -78,10 +78,6 @@ def dashboard(message):
               (f"{month}%",))
     other_by_cat = c.fetchall()
 
-    c.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE month=%s AND status='paid'",
-              (month,))
-    paid_total = float(c.fetchone()[0])
-
     c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='credit'",
               (month,))
     paid_credit_ids = [row[0] for row in c.fetchall()]
@@ -92,8 +88,11 @@ def dashboard(message):
 
     conn.close()
 
-    # Қолда бар = барлық бюджет - төленген - басқа харажатлар
-    remaining = month_budget - paid_total - other
+    credit_total = sum(float(a) for _, _, a, _ in credits)
+    fixed_total = sum(float(a) for _, _, a, _ in fixed)
+
+    # Қолда бар = барлық бюджет - кредитлер - тұрақлы - басқа харажатлар
+    remaining = month_budget - credit_total - fixed_total - other
 
     months_kk = {
         1: "январь", 2: "февраль", 3: "март", 4: "апрель",
