@@ -60,9 +60,9 @@ def dashboard(message):
 
     month = datetime.now().strftime("%Y-%m")
 
-    # Барлық айлардың жиынтық бюджеті
+    # Барлық кірген ақша
     c.execute("SELECT COALESCE(SUM(amount),0) FROM budget")
-    month_budget = float(c.fetchone()[0])
+    total_income = float(c.fetchone()[0])
 
     c.execute("SELECT id, name, amount, pay_day FROM credits WHERE is_active=1")
     credits = c.fetchall()
@@ -78,6 +78,10 @@ def dashboard(message):
               (f"{month}%",))
     other_by_cat = c.fetchall()
 
+    c.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE month=%s AND status='paid'",
+              (month,))
+    paid_total = float(c.fetchone()[0])
+
     c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='credit'",
               (month,))
     paid_credit_ids = [row[0] for row in c.fetchall()]
@@ -88,11 +92,13 @@ def dashboard(message):
 
     conn.close()
 
+    # Семьяда айланған бюджет = кредитлер + тұрақлы + басқа жиынтығы
     credit_total = sum(float(a) for _, _, a, _ in credits)
     fixed_total = sum(float(a) for _, _, a, _ in fixed)
+    family_budget = credit_total + fixed_total + other
 
-    # Қолда бар = барлық бюджет - кредитлер - тұрақлы - басқа харажатлар
-    remaining = month_budget - credit_total - fixed_total - other
+    # Қолда бар = кірген ақша - төленген - басқа харажатлар
+    remaining = total_income - paid_total - other
 
     months_kk = {
         1: "январь", 2: "февраль", 3: "март", 4: "апрель",
@@ -108,7 +114,7 @@ def dashboard(message):
             next_month = today.month + 1 if today.month < 12 else 1
             return months_kk[next_month]
 
-    text = f"💼 Семьяда айланған бюджет: <b>{month_budget:,.0f} сум</b>\n\n"
+    text = f"💼 Семьяда айланған бюджет: <b>{family_budget:,.0f} сум</b>\n\n"
 
     text += "🔴 <b>Кредитлер:</b>\n"
     for cid, name, amount, pay_day in credits:
