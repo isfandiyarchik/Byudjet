@@ -24,9 +24,9 @@ def morning_summary(bot):
 
     month = datetime.now(UZ_TZ).strftime("%Y-%m")
 
-    # Барлық айлардың жиынтық бюджеті
+    # Барлық кірген ақша
     c.execute("SELECT COALESCE(SUM(amount),0) FROM budget")
-    month_budget = float(c.fetchone()[0])
+    total_income = float(c.fetchone()[0])
 
     c.execute("SELECT id, name, amount, pay_day FROM credits WHERE is_active=1")
     credits = c.fetchall()
@@ -58,8 +58,13 @@ def morning_summary(bot):
     users = c.fetchall()
     conn.close()
 
-    # Қолда бар = барлық бюджет - төленген - басқа харажатлар
-    remaining = month_budget - paid_total - other
+    # Семьяда айланған бюджет = кредитлер + тұрақлы + басқа жиынтығы
+    credit_total = sum(float(a) for _, _, a, _ in credits)
+    fixed_total = sum(float(a) for _, _, a, _ in fixed)
+    family_budget = credit_total + fixed_total + other
+
+    # Қолда бар = кірген ақша - төленген - басқа харажатлар
+    remaining = total_income - paid_total - other
 
     months_kk = {
         1: "январь", 2: "февраль", 3: "март", 4: "апрель",
@@ -76,7 +81,7 @@ def morning_summary(bot):
             return months_kk[next_month]
 
     text = "🌅 <b>Қайырлы таң!</b>\n\n"
-    text += f"💼 Семьяда айланған бюджет: <b>{month_budget:,.0f} сум</b>\n\n"
+    text += f"💼 Семьяда айланған бюджет: <b>{family_budget:,.0f} сум</b>\n\n"
 
     text += "🔴 <b>Кредитлер:</b>\n"
     for cid, name, amount, pay_day in credits:
