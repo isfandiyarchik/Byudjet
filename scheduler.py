@@ -24,7 +24,6 @@ def morning_summary(bot):
 
     month = datetime.now(UZ_TZ).strftime("%Y-%m")
 
-    # Барлық кірген ақша
     c.execute("SELECT COALESCE(SUM(amount),0) FROM budget")
     total_income = float(c.fetchone()[0])
 
@@ -58,12 +57,9 @@ def morning_summary(bot):
     users = c.fetchall()
     conn.close()
 
-    # Семьяда айланған бюджет = кредитлер + тұрақлы + басқа жиынтығы
     credit_total = sum(float(a) for _, _, a, _ in credits)
     fixed_total = sum(float(a) for _, _, a, _ in fixed)
     family_budget = credit_total + fixed_total + other
-
-    # Қолда бар = кірген ақша - төленген - басқа харажатлар
     remaining = total_income - paid_total - other
 
     months_kk = {
@@ -90,6 +86,7 @@ def morning_summary(bot):
             text += f"  • {name}: <b>{amount:,.0f} сум</b> ✅\n"
         else:
             text += f"  • {name}: <b>{amount:,.0f} сум</b> ({pay_day}-{get_payment_month(pay_day)})\n"
+    text += f"  Итого: <b>-{credit_total:,.0f} сум</b>\n"
 
     text += "\n🟡 <b>Тұрақлы харажатлар:</b>\n"
     for fid, name, amount, pay_day in fixed:
@@ -98,11 +95,13 @@ def morning_summary(bot):
             text += f"  • {name}: <b>{amount:,.0f} сум</b> ✅\n"
         else:
             text += f"  • {name}: <b>{amount:,.0f} сум</b> ({pay_day}-{get_payment_month(pay_day)})\n"
+    text += f"  Итого: <b>-{fixed_total:,.0f} сум</b>\n"
 
     if other_by_cat:
         text += "\n🟢 <b>Басқа харажатлар:</b>\n"
         for cat, amt in other_by_cat:
             text += f"  • {cat}: <b>{float(amt):,.0f} сум</b>\n"
+        text += f"  Итого: <b>-{other:,.0f} сум</b>\n"
 
     text += f"\n──────────────────\n"
     text += f"💰 Қолда бар: <b>{remaining:,.0f} сум</b>"
