@@ -148,7 +148,9 @@ def settings(message):
         return
     markup = telebot.types.InlineKeyboardMarkup()
     markup.add(telebot.types.InlineKeyboardButton("💳 Кредит өзгертиў", callback_data="set_credit"))
+    markup.add(telebot.types.InlineKeyboardButton("🗑 Кредит ошириу", callback_data="del_credit"))
     markup.add(telebot.types.InlineKeyboardButton("🏠 Тұрақлы харажат өзгертиў", callback_data="set_fixed"))
+    markup.add(telebot.types.InlineKeyboardButton("🗑 Тұрақлы харажат ошириу", callback_data="del_fixed"))
     markup.add(telebot.types.InlineKeyboardButton("➕ Таза кредит қосыў", callback_data="add_credit"))
     markup.add(telebot.types.InlineKeyboardButton("➕ Таза тұрақлы қосыў", callback_data="add_fixed"))
     bot.send_message(message.chat.id, "⚙️ Не өзгертесиз?", reply_markup=markup)
@@ -167,6 +169,62 @@ def set_credit_menu(call):
             callback_data=f"ec_{cid}"
         ))
     bot.send_message(call.message.chat.id, "Қайси кредитти өзгертесиз?", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "del_credit")
+def del_credit_menu(call):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT id, name, amount FROM credits WHERE is_active=1")
+    credits = c.fetchall()
+    conn.close()
+    markup = telebot.types.InlineKeyboardMarkup()
+    for cid, name, amount in credits:
+        markup.add(telebot.types.InlineKeyboardButton(
+            f"🗑 {name}: {float(amount):,.0f} сум",
+            callback_data=f"dc_{cid}"
+        ))
+    bot.send_message(call.message.chat.id, "Қайси кредитти оширесиз?", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("dc_"))
+def delete_credit(call):
+    cid = int(call.data.split("_")[1])
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT name FROM credits WHERE id=%s", (cid,))
+    name = c.fetchone()[0]
+    c.execute("UPDATE credits SET is_active=0 WHERE id=%s", (cid,))
+    conn.commit()
+    conn.close()
+    bot.answer_callback_query(call.id, f"✅ {name} оширилди!")
+    bot.send_message(call.message.chat.id, f"✅ <b>{name}</b> оширилди!", parse_mode='HTML')
+
+@bot.callback_query_handler(func=lambda call: call.data == "del_fixed")
+def del_fixed_menu(call):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT id, name, amount FROM fixed_expenses WHERE is_active=1")
+    fixed = c.fetchall()
+    conn.close()
+    markup = telebot.types.InlineKeyboardMarkup()
+    for fid, name, amount in fixed:
+        markup.add(telebot.types.InlineKeyboardButton(
+            f"🗑 {name}: {float(amount):,.0f} сум",
+            callback_data=f"df_{fid}"
+        ))
+    bot.send_message(call.message.chat.id, "Қайси харажатты оширесиз?", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("df_"))
+def delete_fixed(call):
+    fid = int(call.data.split("_")[1])
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT name FROM fixed_expenses WHERE id=%s", (fid,))
+    name = c.fetchone()[0]
+    c.execute("UPDATE fixed_expenses SET is_active=0 WHERE id=%s", (fid,))
+    conn.commit()
+    conn.close()
+    bot.answer_callback_query(call.id, f"✅ {name} оширилди!")
+    bot.send_message(call.message.chat.id, f"✅ <b>{name}</b> оширилди!", parse_mode='HTML')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ec_"))
 def edit_credit(call):
