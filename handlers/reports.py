@@ -1,4 +1,4 @@
-from database import get_conn
+from database import get_conn, get_credits_for_month, get_fixed_for_month
 from datetime import datetime
 import telebot
 
@@ -14,22 +14,18 @@ def register_report_handlers(bot):
     def report_period(message):
         now = datetime.now()
         markup = telebot.types.InlineKeyboardMarkup()
-
         for month_num in range(1, 13):
             year = now.year
             month_str = f"{year}-{month_num:02d}"
-
             if month_num < now.month:
                 label = f"📅 {MONTHS_RU[month_num]} {year}"
             elif month_num == now.month:
                 label = f"📅 {MONTHS_RU[month_num]} {year} ← бул ай"
             else:
                 label = f"✏️ {MONTHS_RU[month_num]} {year} — план"
-
             markup.add(telebot.types.InlineKeyboardButton(
                 label, callback_data=f"rep_{month_str}"
             ))
-
         bot.send_message(message.chat.id, "Есап дәўирин таңла:", reply_markup=markup)
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("rep_") and len(call.data) == 11)
@@ -51,14 +47,6 @@ def register_report_handlers(bot):
                   (f"{date_filter}%",))
         income_by_source = c.fetchall()
 
-        c.execute("SELECT id, name, amount FROM credits WHERE is_active=1")
-        credits = c.fetchall()
-        credit_total = sum(float(a) for _, _, a in credits)
-
-        c.execute("SELECT id, name, amount FROM fixed_expenses WHERE is_active=1")
-        fixed = c.fetchall()
-        fixed_total = sum(float(a) for _, _, a in fixed)
-
         c.execute("SELECT category, COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s GROUP BY category",
                   (f"{date_filter}%",))
         other_by_cat = c.fetchall()
@@ -67,17 +55,18 @@ def register_report_handlers(bot):
         c.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE month=%s AND status='paid'",
                   (date_filter,))
         paid_total = float(c.fetchone()[0])
-
         conn.close()
+
+        # Сол айдың кредит/тұрақлы суммалары
+        credits = get_credits_for_month(date_filter)
+        fixed = get_fixed_for_month(date_filter)
+        credit_total = sum(float(a) for _, _, a, _ in credits)
+        fixed_total = sum(float(a) for _, _, a, _ in fixed)
 
         family_budget = credit_total + fixed_total + other_total
         remaining = total_budget - paid_total - other_total
 
-        if is_future:
-            title = f"✏️ {MONTHS_RU[month_num]} {year} — план"
-        else:
-            title = f"📊 {MONTHS_RU[month_num]} {year} есабы"
-
+        title = f"✏️ {MONTHS_RU[month_num]} {year} — жоспар" if is_future else f"📊 {MONTHS_RU[month_num]} {year} есабы"
         text = f"{title}\n\n"
 
         if income_by_source:
@@ -87,12 +76,12 @@ def register_report_handlers(bot):
             text += f"  Итого: <b>+{total_budget:,.0f} сум</b>\n\n"
 
         text += "🔴 <b>Кредитлер:</b>\n"
-        for cid, name, amount in credits:
+        for cid, name, amount, pay_day in credits:
             text += f"  • {name}: <b>{float(amount):,.0f} сум</b>\n"
         text += f"  Итого: <b>-{credit_total:,.0f} сум</b>\n"
 
         text += "\n🟡 <b>Тұрақлы харажатлар:</b>\n"
-        for fid, name, amount in fixed:
+        for fid, name, amount, pay_day in fixed:
             text += f"  • {name}: <b>{float(amount):,.0f} сум</b>\n"
         text += f"  Итого: <b>-{fixed_total:,.0f} сум</b>\n"
 
@@ -109,231 +98,261 @@ def register_report_handlers(bot):
 
         if is_future:
             markup = telebot.types.InlineKeyboardMarkup()
-
-            # Кредитлер өзгертиў/жою
-            for cid, name, amount in credits:
+            for cid, name, amount, pay_day in credits:
                 markup.row(
                     telebot.types.InlineKeyboardButton(
-                        f"✏️ {name}",
+                        f"✏️ {name}: {float(amount):,.0f}",
                         callback_data=f"fec_{cid}_{date_filter}"
                     ),
                     telebot.types.InlineKeyboardButton(
-                        f"🗑",
-                        callback_data=f"fdc_{cid}"
+                        "🗑", callback_data=f"fdc_{cid}_{date_filter}"
                     )
                 )
             markup.add(telebot.types.InlineKeyboardButton(
-                "➕ Таза кредит қосыў",
-                callback_data=f"fac_{date_filter}"
+                "➕ Таза кредит қосыў", callback_data=f"fac_{date_filter}"
             ))
-
-            # Тұрақлы өзгертиў/жою
-            for fid, name, amount in fixed:
+            for fid, name, amount, pay_day in fixed:
                 markup.row(
                     telebot.types.InlineKeyboardButton(
-                        f"✏️ {name}",
+                        f"✏️ {name}: {float(amount):,.0f}",
                         callback_data=f"fef_{fid}_{date_filter}"
                     ),
                     telebot.types.InlineKeyboardButton(
-                        f"🗑",
-                        callback_data=f"fdf_{fid}"
+                        "🗑", callback_data=f"fdf_{fid}_{date_filter}"
                     )
                 )
             markup.add(telebot.types.InlineKeyboardButton(
-                "➕ Таза тұрақлы қосыў",
-                callback_data=f"faf_{date_filter}"
+                "➕ Таза тұрақлы қосыў", callback_data=f"faf_{date_filter}"
             ))
             markup.add(telebot.types.InlineKeyboardButton(
-                "➕ Басқа харажат қосыў",
-                callback_data=f"fao_{date_filter}"
+                "➕ Басқа харажат қосыў", callback_data=f"fao_{date_filter}"
             ))
-
             bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode='HTML')
         else:
             bot.send_message(call.message.chat.id, text, parse_mode='HTML')
 
-    # ✏️ Кредит өзгертиў
+    # ✏️ Кредит өзгертиў (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fec_"))
     def future_edit_credit(call):
         parts = call.data.split("_")
         cid = int(parts[1])
+        date_filter = f"{parts[2]}-{parts[3]}"
         msg = bot.send_message(call.message.chat.id, "Таза сумма жаз (сум):\nМысалы: 450000")
-        bot.register_next_step_handler(msg, future_save_credit_amount, cid)
+        bot.register_next_step_handler(msg, fec_amount, cid, date_filter)
 
-    def future_save_credit_amount(message, cid):
+    def fec_amount(message, cid, date_filter):
         try:
             amount = float(message.text.replace(",", "").replace(" ", ""))
-            msg = bot.send_message(message.chat.id, "Төлем күнин жаз (1-31):\nМысалы: 15")
-            bot.register_next_step_handler(msg, future_save_credit_day, cid, amount)
+            msg = bot.send_message(message.chat.id, "Төлем күнин жаз (1-31):")
+            bot.register_next_step_handler(msg, fec_day, cid, amount, date_filter)
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
 
-    def future_save_credit_day(message, cid, amount):
+    def fec_day(message, cid, amount, date_filter):
         try:
             day = int(message.text.strip())
             if not 1 <= day <= 31:
                 raise ValueError
             conn = get_conn()
             c = conn.cursor()
-            c.execute("UPDATE credits SET amount=%s, pay_day=%s WHERE id=%s",
-                      (amount, day, cid))
+            c.execute("SELECT id FROM credit_overrides WHERE credit_id=%s AND month=%s", (cid, date_filter))
+            existing = c.fetchone()
+            if existing:
+                c.execute("UPDATE credit_overrides SET amount=%s, pay_day=%s, is_active=1 WHERE credit_id=%s AND month=%s",
+                          (amount, day, cid, date_filter))
+            else:
+                c.execute("INSERT INTO credit_overrides (credit_id, month, amount, pay_day, is_active) VALUES (%s,%s,%s,%s,1)",
+                          (cid, date_filter, amount, day))
             conn.commit()
             conn.close()
             bot.send_message(message.chat.id,
-                             f"✅ Тазаланды!\n"
+                             f"✅ Тек <b>{date_filter}</b> айына тазаланды!\n"
                              f"• Сумма: <b>{amount:,.0f} сум</b>\n"
                              f"• Төлем күни: {day}-күн",
                              parse_mode='HTML')
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
 
-    # 🗑 Кредит жою
+    # 🗑 Кредит жою (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fdc_"))
     def future_del_credit(call):
-        cid = int(call.data.split("_")[1])
+        parts = call.data.split("_")
+        cid = int(parts[1])
+        date_filter = f"{parts[2]}-{parts[3]}"
         conn = get_conn()
         c = conn.cursor()
         c.execute("SELECT name FROM credits WHERE id=%s", (cid,))
         name = c.fetchone()[0]
-        c.execute("UPDATE credits SET is_active=0 WHERE id=%s", (cid,))
+        c.execute("SELECT id FROM credit_overrides WHERE credit_id=%s AND month=%s", (cid, date_filter))
+        existing = c.fetchone()
+        if existing:
+            c.execute("UPDATE credit_overrides SET is_active=0 WHERE credit_id=%s AND month=%s",
+                      (cid, date_filter))
+        else:
+            c.execute("INSERT INTO credit_overrides (credit_id, month, amount, pay_day, is_active) VALUES (%s,%s,0,1,0)",
+                      (cid, date_filter))
         conn.commit()
         conn.close()
-        bot.answer_callback_query(call.id, f"✅ {name} оширилди!")
+        bot.answer_callback_query(call.id, f"✅ {name} тек {date_filter} айынан оширилди!")
         bot.send_message(call.message.chat.id,
-                         f"✅ <b>{name}</b> оширилди!",
+                         f"✅ <b>{name}</b> тек <b>{date_filter}</b> айынан оширилди!",
                          parse_mode='HTML')
 
-    # ✏️ Тұрақлы өзгертиў
+    # ✏️ Тұрақлы өзгертиў (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fef_"))
     def future_edit_fixed(call):
         parts = call.data.split("_")
         fid = int(parts[1])
+        date_filter = f"{parts[2]}-{parts[3]}"
         msg = bot.send_message(call.message.chat.id, "Таза сумма жаз (сум):\nМысалы: 300000")
-        bot.register_next_step_handler(msg, future_save_fixed_amount, fid)
+        bot.register_next_step_handler(msg, fef_amount, fid, date_filter)
 
-    def future_save_fixed_amount(message, fid):
+    def fef_amount(message, fid, date_filter):
         try:
             amount = float(message.text.replace(",", "").replace(" ", ""))
-            msg = bot.send_message(message.chat.id, "Төлем күнин жаз (1-31):\nМысалы: 23")
-            bot.register_next_step_handler(msg, future_save_fixed_day, fid, amount)
+            msg = bot.send_message(message.chat.id, "Төлем күнин жаз (1-31):")
+            bot.register_next_step_handler(msg, fef_day, fid, amount, date_filter)
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
 
-    def future_save_fixed_day(message, fid, amount):
+    def fef_day(message, fid, amount, date_filter):
         try:
             day = int(message.text.strip())
             if not 1 <= day <= 31:
                 raise ValueError
             conn = get_conn()
             c = conn.cursor()
-            c.execute("UPDATE fixed_expenses SET amount=%s, pay_day=%s WHERE id=%s",
-                      (amount, day, fid))
+            c.execute("SELECT id FROM fixed_overrides WHERE fixed_id=%s AND month=%s", (fid, date_filter))
+            existing = c.fetchone()
+            if existing:
+                c.execute("UPDATE fixed_overrides SET amount=%s, pay_day=%s, is_active=1 WHERE fixed_id=%s AND month=%s",
+                          (amount, day, fid, date_filter))
+            else:
+                c.execute("INSERT INTO fixed_overrides (fixed_id, month, amount, pay_day, is_active) VALUES (%s,%s,%s,%s,1)",
+                          (fid, date_filter, amount, day))
             conn.commit()
             conn.close()
             bot.send_message(message.chat.id,
-                             f"✅ Тазаланды!\n"
+                             f"✅ Тек <b>{date_filter}</b> айына тазаланды!\n"
                              f"• Сумма: <b>{amount:,.0f} сум</b>\n"
                              f"• Төлем күни: {day}-күн",
                              parse_mode='HTML')
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
 
-    # 🗑 Тұрақлы жою
+    # 🗑 Тұрақлы жою (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fdf_"))
     def future_del_fixed(call):
-        fid = int(call.data.split("_")[1])
+        parts = call.data.split("_")
+        fid = int(parts[1])
+        date_filter = f"{parts[2]}-{parts[3]}"
         conn = get_conn()
         c = conn.cursor()
         c.execute("SELECT name FROM fixed_expenses WHERE id=%s", (fid,))
         name = c.fetchone()[0]
-        c.execute("UPDATE fixed_expenses SET is_active=0 WHERE id=%s", (fid,))
+        c.execute("SELECT id FROM fixed_overrides WHERE fixed_id=%s AND month=%s", (fid, date_filter))
+        existing = c.fetchone()
+        if existing:
+            c.execute("UPDATE fixed_overrides SET is_active=0 WHERE fixed_id=%s AND month=%s",
+                      (fid, date_filter))
+        else:
+            c.execute("INSERT INTO fixed_overrides (fixed_id, month, amount, pay_day, is_active) VALUES (%s,%s,0,1,0)",
+                      (fid, date_filter))
         conn.commit()
         conn.close()
-        bot.answer_callback_query(call.id, f"✅ {name} оширилди!")
+        bot.answer_callback_query(call.id, f"✅ {name} тек {date_filter} айынан оширилди!")
         bot.send_message(call.message.chat.id,
-                         f"✅ <b>{name}</b> оширилди!",
+                         f"✅ <b>{name}</b> тек <b>{date_filter}</b> айынан оширилди!",
                          parse_mode='HTML')
 
-    # ➕ Таза кредит қосыў
+    # ➕ Таза кредит қосыў (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fac_"))
     def future_add_credit(call):
         date_filter = call.data[4:]
         msg = bot.send_message(call.message.chat.id, "Таза кредит атын жаз:\nМысалы: Kaspi кредит")
-        bot.register_next_step_handler(msg, future_add_credit_name, date_filter)
+        bot.register_next_step_handler(msg, fac_name, date_filter)
 
-    def future_add_credit_name(message, date_filter):
+    def fac_name(message, date_filter):
         name = message.text.strip()
         if not name:
             bot.send_message(message.chat.id, "❌ Аты бос болмасын!")
             return
-        msg = bot.send_message(message.chat.id, f"💳 {name} суммасын жаз (сум):\nМысалы: 500000")
-        bot.register_next_step_handler(msg, future_add_credit_amount, name, date_filter)
+        msg = bot.send_message(message.chat.id, f"💳 {name} суммасын жаз (сум):")
+        bot.register_next_step_handler(msg, fac_amount, name, date_filter)
 
-    def future_add_credit_amount(message, name, date_filter):
+    def fac_amount(message, name, date_filter):
         try:
             amount = float(message.text.replace(",", "").replace(" ", ""))
-            msg = bot.send_message(message.chat.id, "Төлем күнин жаз (1-31):\nМысалы: 10")
-            bot.register_next_step_handler(msg, future_add_credit_day, name, amount, date_filter)
+            msg = bot.send_message(message.chat.id, "Төлем күнин жаз (1-31):")
+            bot.register_next_step_handler(msg, fac_day, name, amount, date_filter)
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
 
-    def future_add_credit_day(message, name, amount, date_filter):
+    def fac_day(message, name, amount, date_filter):
         try:
             day = int(message.text.strip())
             if not 1 <= day <= 31:
                 raise ValueError
             conn = get_conn()
             c = conn.cursor()
-            c.execute("INSERT INTO credits (name, amount, pay_day, is_active) VALUES (%s,%s,%s,1)",
+            # Жаңа кредит қосамыз
+            c.execute("INSERT INTO credits (name, amount, pay_day, is_active) VALUES (%s,%s,%s,0)",
                       (name, amount, day))
+            c.execute("SELECT lastval()")
+            new_id = c.fetchone()[0]
+            # Тек сол айға белсенді
+            c.execute("INSERT INTO credit_overrides (credit_id, month, amount, pay_day, is_active) VALUES (%s,%s,%s,%s,1)",
+                      (new_id, date_filter, amount, day))
             conn.commit()
             conn.close()
             bot.send_message(message.chat.id,
-                             f"✅ Таза кредит қосылды!\n"
-                             f"• Аты: {name}\n"
+                             f"✅ <b>{name}</b> тек <b>{date_filter}</b> айына қосылды!\n"
                              f"• Сумма: <b>{amount:,.0f} сум</b>\n"
                              f"• Төлем күни: {day}-күн",
                              parse_mode='HTML')
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
 
-    # ➕ Таза тұрақлы қосыў
+    # ➕ Таза тұрақлы қосыў (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("faf_"))
     def future_add_fixed(call):
         date_filter = call.data[4:]
         msg = bot.send_message(call.message.chat.id, "Таза тұрақлы харажат атын жаз:\nМысалы: Интернет")
-        bot.register_next_step_handler(msg, future_add_fixed_name, date_filter)
+        bot.register_next_step_handler(msg, faf_name, date_filter)
 
-    def future_add_fixed_name(message, date_filter):
+    def faf_name(message, date_filter):
         name = message.text.strip()
         if not name:
             bot.send_message(message.chat.id, "❌ Аты бос болмасын!")
             return
-        msg = bot.send_message(message.chat.id, f"🏠 {name} суммасын жаз (сум):\nМысалы: 200000")
-        bot.register_next_step_handler(msg, future_add_fixed_amount, name, date_filter)
+        msg = bot.send_message(message.chat.id, f"🏠 {name} суммасын жаз (сум):")
+        bot.register_next_step_handler(msg, faf_amount, name, date_filter)
 
-    def future_add_fixed_amount(message, name, date_filter):
+    def faf_amount(message, name, date_filter):
         try:
             amount = float(message.text.replace(",", "").replace(" ", ""))
-            msg = bot.send_message(message.chat.id, "Төлем күнин жаз (1-31):\nМысалы: 5")
-            bot.register_next_step_handler(msg, future_add_fixed_day, name, amount, date_filter)
+            msg = bot.send_message(message.chat.id, "Төлем күнин жаз (1-31):")
+            bot.register_next_step_handler(msg, faf_day, name, amount, date_filter)
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
 
-    def future_add_fixed_day(message, name, amount, date_filter):
+    def faf_day(message, name, amount, date_filter):
         try:
             day = int(message.text.strip())
             if not 1 <= day <= 31:
                 raise ValueError
             conn = get_conn()
             c = conn.cursor()
-            c.execute("INSERT INTO fixed_expenses (name, amount, pay_day, is_active) VALUES (%s,%s,%s,1)",
+            c.execute("INSERT INTO fixed_expenses (name, amount, pay_day, is_active) VALUES (%s,%s,%s,0)",
                       (name, amount, day))
+            c.execute("SELECT lastval()")
+            new_id = c.fetchone()[0]
+            c.execute("INSERT INTO fixed_overrides (fixed_id, month, amount, pay_day, is_active) VALUES (%s,%s,%s,%s,1)",
+                      (new_id, date_filter, amount, day))
             conn.commit()
             conn.close()
             bot.send_message(message.chat.id,
-                             f"✅ Таза тұрақлы харажат қосылды!\n"
-                             f"• Аты: {name}\n"
+                             f"✅ <b>{name}</b> тек <b>{date_filter}</b> айына қосылды!\n"
                              f"• Сумма: <b>{amount:,.0f} сум</b>\n"
                              f"• Төлем күни: {day}-күн",
                              parse_mode='HTML')
@@ -345,17 +364,17 @@ def register_report_handlers(bot):
     def future_add_other(call):
         date_filter = call.data[4:]
         msg = bot.send_message(call.message.chat.id, "Харажат атын жаз:\nМысалы: Коммунал")
-        bot.register_next_step_handler(msg, future_add_other_name, date_filter)
+        bot.register_next_step_handler(msg, fao_name, date_filter)
 
-    def future_add_other_name(message, date_filter):
+    def fao_name(message, date_filter):
         category = message.text.strip()
         if not category:
             bot.send_message(message.chat.id, "❌ Аты бос болмасын!")
             return
-        msg = bot.send_message(message.chat.id, f"💸 {category} суммасын жаз (сум):\nМысалы: 50000")
-        bot.register_next_step_handler(msg, future_add_other_amount, category, date_filter)
+        msg = bot.send_message(message.chat.id, f"💸 {category} суммасын жаз (сум):")
+        bot.register_next_step_handler(msg, fao_amount, category, date_filter)
 
-    def future_add_other_amount(message, category, date_filter):
+    def fao_amount(message, category, date_filter):
         try:
             amount = float(message.text.replace(",", "").replace(" ", ""))
             conn = get_conn()
