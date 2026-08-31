@@ -3,7 +3,7 @@ import os
 from flask import Flask, request
 from dotenv import load_dotenv
 from datetime import datetime
-from database import init_db, get_conn
+from database import init_db, get_conn, get_credits_for_month, get_fixed_for_month
 from scheduler import start_scheduler
 from handlers.budget import register_budget_handlers
 from handlers.expenses import register_expense_handlers
@@ -63,12 +63,6 @@ def dashboard(message):
     c.execute("SELECT COALESCE(SUM(amount),0) FROM budget")
     total_income = float(c.fetchone()[0])
 
-    c.execute("SELECT id, name, amount, pay_day FROM credits WHERE is_active=1")
-    credits = c.fetchall()
-
-    c.execute("SELECT id, name, amount, pay_day FROM fixed_expenses WHERE is_active=1")
-    fixed = c.fetchall()
-
     c.execute("SELECT COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s",
               (f"{month}%",))
     other = float(c.fetchone()[0])
@@ -90,6 +84,10 @@ def dashboard(message):
     paid_fixed_ids = [row[0] for row in c.fetchall()]
 
     conn.close()
+
+    # Осы айдың кредит/тұрақлы суммалары
+    credits = get_credits_for_month(month)
+    fixed = get_fixed_for_month(month)
 
     credit_total = sum(float(a) for _, _, a, _ in credits)
     fixed_total = sum(float(a) for _, _, a, _ in fixed)
@@ -157,11 +155,8 @@ def settings(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == "set_credit")
 def set_credit_menu(call):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT id, name, amount, pay_day FROM credits WHERE is_active=1")
-    credits = c.fetchall()
-    conn.close()
+    month = datetime.now().strftime("%Y-%m")
+    credits = get_credits_for_month(month)
     markup = telebot.types.InlineKeyboardMarkup()
     for cid, name, amount, pay_day in credits:
         markup.add(telebot.types.InlineKeyboardButton(
@@ -172,13 +167,10 @@ def set_credit_menu(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "del_credit")
 def del_credit_menu(call):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT id, name, amount FROM credits WHERE is_active=1")
-    credits = c.fetchall()
-    conn.close()
+    month = datetime.now().strftime("%Y-%m")
+    credits = get_credits_for_month(month)
     markup = telebot.types.InlineKeyboardMarkup()
-    for cid, name, amount in credits:
+    for cid, name, amount, _ in credits:
         markup.add(telebot.types.InlineKeyboardButton(
             f"🗑 {name}: {float(amount):,.0f} сум",
             callback_data=f"dc_{cid}"
@@ -200,13 +192,10 @@ def delete_credit(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "del_fixed")
 def del_fixed_menu(call):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT id, name, amount FROM fixed_expenses WHERE is_active=1")
-    fixed = c.fetchall()
-    conn.close()
+    month = datetime.now().strftime("%Y-%m")
+    fixed = get_fixed_for_month(month)
     markup = telebot.types.InlineKeyboardMarkup()
-    for fid, name, amount in fixed:
+    for fid, name, amount, _ in fixed:
         markup.add(telebot.types.InlineKeyboardButton(
             f"🗑 {name}: {float(amount):,.0f} сум",
             callback_data=f"df_{fid}"
@@ -261,11 +250,8 @@ def save_credit_day(message, cid, amount):
 
 @bot.callback_query_handler(func=lambda call: call.data == "set_fixed")
 def set_fixed_menu(call):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT id, name, amount, pay_day FROM fixed_expenses WHERE is_active=1")
-    fixed = c.fetchall()
-    conn.close()
+    month = datetime.now().strftime("%Y-%m")
+    fixed = get_fixed_for_month(month)
     markup = telebot.types.InlineKeyboardMarkup()
     for fid, name, amount, pay_day in fixed:
         markup.add(telebot.types.InlineKeyboardButton(
