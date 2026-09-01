@@ -4,6 +4,44 @@ import os
 def get_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"))
 
+def get_credits_for_month(month):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT id, name, amount, pay_day FROM credits WHERE is_active=1")
+    credits = c.fetchall()
+    result = []
+    for cid, name, amount, pay_day in credits:
+        c.execute("SELECT amount, pay_day, is_active FROM credit_overrides WHERE credit_id=%s AND month=%s",
+                  (cid, month))
+        override = c.fetchone()
+        if override:
+            if override[2] == 0:
+                continue
+            result.append((cid, name, float(override[0]), override[1]))
+        else:
+            result.append((cid, name, float(amount), pay_day))
+    conn.close()
+    return result
+
+def get_fixed_for_month(month):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT id, name, amount, pay_day FROM fixed_expenses WHERE is_active=1")
+    fixed = c.fetchall()
+    result = []
+    for fid, name, amount, pay_day in fixed:
+        c.execute("SELECT amount, pay_day, is_active FROM fixed_overrides WHERE fixed_id=%s AND month=%s",
+                  (fid, month))
+        override = c.fetchone()
+        if override:
+            if override[2] == 0:
+                continue
+            result.append((fid, name, float(override[0]), override[1]))
+        else:
+            result.append((fid, name, float(amount), pay_day))
+    conn.close()
+    return result
+
 def init_db():
     conn = get_conn()
     c = conn.cursor()
@@ -59,7 +97,6 @@ def init_db():
         created_at TEXT
     )''')
 
-    # Ай сайынғы кредит суммасын өзгерту үшін
     c.execute('''CREATE TABLE IF NOT EXISTS credit_overrides (
         id SERIAL PRIMARY KEY,
         credit_id INTEGER,
@@ -69,7 +106,6 @@ def init_db():
         is_active INTEGER DEFAULT 1
     )''')
 
-    # Ай сайынғы тұрақлы харажат суммасын өзгерту үшін
     c.execute('''CREATE TABLE IF NOT EXISTS fixed_overrides (
         id SERIAL PRIMARY KEY,
         fixed_id INTEGER,
@@ -96,53 +132,6 @@ def init_db():
 
     conn.commit()
     conn.close()
-
-
-def get_credits_for_month(month):
-    """Белгили ай үшын кредитлерди алыу — override болса соны, болмаса негизгисин"""
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT id, name, amount, pay_day FROM credits WHERE is_active=1")
-    credits = c.fetchall()
-
-    result = []
-    for cid, name, amount, pay_day in credits:
-        c.execute("SELECT amount, pay_day, is_active FROM credit_overrides WHERE credit_id=%s AND month=%s",
-                  (cid, month))
-        override = c.fetchone()
-        if override:
-            if override[2] == 0:  # is_active=0 → жойылған
-                continue
-            result.append((cid, name, float(override[0]), override[1]))
-        else:
-            result.append((cid, name, float(amount), pay_day))
-
-    conn.close()
-    return result
-
-
-def get_fixed_for_month(month):
-    """Белгили ай үшын тұрақлы харажатларды алыу — override болса соны, болмаса негизгисин"""
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT id, name, amount, pay_day FROM fixed_expenses WHERE is_active=1")
-    fixed = c.fetchall()
-
-    result = []
-    for fid, name, amount, pay_day in fixed:
-        c.execute("SELECT amount, pay_day, is_active FROM fixed_overrides WHERE fixed_id=%s AND month=%s",
-                  (fid, month))
-        override = c.fetchone()
-        if override:
-            if override[2] == 0:  # is_active=0 → жойылған
-                continue
-            result.append((fid, name, float(override[0]), override[1]))
-        else:
-            result.append((fid, name, float(amount), pay_day))
-
-    conn.close()
-    return result
-
 
 def reset_db():
     conn = get_conn()
