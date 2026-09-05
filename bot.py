@@ -60,7 +60,9 @@ def dashboard(message):
 
     month = datetime.now().strftime("%Y-%m")
 
-    c.execute("SELECT COALESCE(SUM(amount),0) FROM budget")
+    # ТҮЗЕТИЛДИ: тек осы айдың кириси есапланады (бурын барлық уақыттың кириси қосылатын еди)
+    c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
+              (f"{month}%",))
     total_income = float(c.fetchone()[0])
 
     c.execute("SELECT COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s",
