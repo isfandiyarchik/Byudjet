@@ -3,19 +3,32 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from pytz import timezone
 from database import get_conn
 from datetime import datetime, timedelta
+from backup import generate_backup
 
 UZ_TZ = timezone("Asia/Tashkent")
 
-def start_scheduler(bot, admin_id):
+def start_scheduler(bot, admin_ids):
     scheduler = BackgroundScheduler(timezone=UZ_TZ)
     scheduler.add_job(check_credit_reminders, 'cron', hour=9, minute=0,
-                      args=[bot, admin_id])
+                      args=[bot, admin_ids])
     scheduler.add_job(monthly_payment_reminder, 'cron', day=1, hour=9, minute=0,
-                      args=[bot, admin_id])
+                      args=[bot, admin_ids])
     scheduler.add_job(morning_summary, 'cron', hour=8, minute=30,
                       args=[bot])
+    scheduler.add_job(daily_backup, 'cron', hour=3, minute=0,
+                      args=[bot, admin_ids])
     scheduler.start()
     print("✅ Scheduler иске қосылды! (Asia/Tashkent)")
+
+def daily_backup(bot, admin_ids):
+    print(f"📦 Күнделикли backup таярланып атыр... {datetime.now(UZ_TZ)}")
+    for admin_id in admin_ids:
+        try:
+            buf = generate_backup()  # regenerate per-recipient (BytesIO cursor safety)
+            bot.send_document(admin_id, buf, caption="📦 Автоматлық күнделикли backup")
+            print(f"✅ Backup жиберилди: {admin_id}")
+        except Exception as e:
+            print(f"❌ Backup жиберилмеди {admin_id}: {e}")
 
 def morning_summary(bot):
     print(f"🌅 Таңертең хабарлама жиберилди... {datetime.now(UZ_TZ)}")
@@ -24,7 +37,8 @@ def morning_summary(bot):
 
     month = datetime.now(UZ_TZ).strftime("%Y-%m")
 
-    c.execute("SELECT COALESCE(SUM(amount),0) FROM budget")
+    c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
+              (f"{month}%",))
     total_income = float(c.fetchone()[0])
 
     c.execute("SELECT id, name, amount, pay_day FROM credits WHERE is_active=1")
@@ -113,7 +127,7 @@ def morning_summary(bot):
         except Exception as e:
             print(f"❌ Қате: {e}")
 
-def check_credit_reminders(bot, admin_id):
+def check_credit_reminders(bot, admin_ids):
     print(f"🔍 Кредит тексерилип атыр... {datetime.now(UZ_TZ)}")
     conn = get_conn()
     c = conn.cursor()
@@ -160,7 +174,7 @@ def check_credit_reminders(bot, admin_id):
             except Exception as e:
                 print(f"❌ Қате: {e}")
 
-def monthly_payment_reminder(bot, admin_id):
+def monthly_payment_reminder(bot, admin_ids):
     print(f"📅 Ай басы ескертиуи... {datetime.now(UZ_TZ)}")
     conn = get_conn()
     c = conn.cursor()
@@ -170,6 +184,12 @@ def monthly_payment_reminder(bot, admin_id):
     fixed = c.fetchall()
     c.execute("SELECT telegram_id FROM users")
     users = c.fetchall()
+
+    month = datetime.now(UZ_TZ).strftime("%Y-%m")
+    c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='credit'", (month,))
+    paid_credit_ids = {row[0] for row in c.fetchall()}
+    c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='fixed'", (month,))
+    paid_fixed_ids = {row[0] for row in c.fetchall()}
     conn.close()
 
     markup = telebot.types.InlineKeyboardMarkup()
@@ -177,17 +197,19 @@ def monthly_payment_reminder(bot, admin_id):
 
     for cid, name, amount in credits:
         text += f"💳 {name}: <b>{float(amount):,.0f} сум</b>\n"
-        markup.add(telebot.types.InlineKeyboardButton(
-            f"✅ {name} төледим",
-            callback_data=f"pc_{cid}"
-        ))
+        if cid not in paid_credit_ids:
+            markup.add(telebot.types.InlineKeyboardButton(
+                f"✅ {name} төледим",
+                callback_data=f"pc_{cid}"
+            ))
 
     for fid, name, amount in fixed:
         text += f"🏠 {name}: <b>{float(amount):,.0f} сум</b>\n"
-        markup.add(telebot.types.InlineKeyboardButton(
-            f"✅ {name} төледим",
-            callback_data=f"pf_{fid}"
-        ))
+        if fid not in paid_fixed_ids:
+            markup.add(telebot.types.InlineKeyboardButton(
+                f"✅ {name} төледим",
+                callback_data=f"pf_{fid}"
+            ))
 
     for (telegram_id,) in users:
         try:
