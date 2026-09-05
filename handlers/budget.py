@@ -1,6 +1,7 @@
 from database import get_conn
 from datetime import datetime
 import telebot
+from common import with_cancel
 
 def register_budget_handlers(bot):
 
@@ -23,7 +24,7 @@ def register_budget_handlers(bot):
         }
         source = sources.get(call.data, "Басқа")
         msg = bot.send_message(call.message.chat.id, f"💵 {source} суммасын жаз (сум):")
-        bot.register_next_step_handler(msg, save_budget, source, call.from_user.id)
+        bot.register_next_step_handler(msg, with_cancel(bot, save_budget), source, call.from_user.id)
 
     def save_budget(message, source, telegram_id):
         try:
