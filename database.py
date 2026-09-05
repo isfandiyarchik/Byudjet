@@ -42,6 +42,44 @@ def get_fixed_for_month(month):
     conn.close()
     return result
 
+def get_category_limit(category):
+    """Returns the monthly limit (float) for a category, or None if not set."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT limit_amount FROM category_limits WHERE category=%s", (category,))
+    row = c.fetchone()
+    conn.close()
+    return float(row[0]) if row else None
+
+def set_category_limit(category, limit_amount):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT category FROM category_limits WHERE category=%s", (category,))
+    existing = c.fetchone()
+    if existing:
+        c.execute("UPDATE category_limits SET limit_amount=%s WHERE category=%s",
+                  (limit_amount, category))
+    else:
+        c.execute("INSERT INTO category_limits (category, limit_amount) VALUES (%s,%s)",
+                  (category, limit_amount))
+    conn.commit()
+    conn.close()
+
+def get_all_category_limits():
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT category, limit_amount FROM category_limits ORDER BY category")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def delete_category_limit(category):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM category_limits WHERE category=%s", (category,))
+    conn.commit()
+    conn.close()
+
 def init_db():
     conn = get_conn()
     c = conn.cursor()
@@ -115,6 +153,12 @@ def init_db():
         is_active INTEGER DEFAULT 1
     )''')
 
+    # ЖАҢА: категория бойынша ай сайынғы лимит
+    c.execute('''CREATE TABLE IF NOT EXISTS category_limits (
+        category TEXT PRIMARY KEY,
+        limit_amount REAL
+    )''')
+
     c.execute("SELECT COUNT(*) FROM credits")
     if c.fetchone()[0] == 0:
         c.executemany("INSERT INTO credits (name, amount, pay_day) VALUES (%s,%s,%s)", [
@@ -144,5 +188,6 @@ def reset_db():
     c.execute("DROP TABLE IF EXISTS credits")
     c.execute("DROP TABLE IF EXISTS budget")
     c.execute("DROP TABLE IF EXISTS users")
+    c.execute("DROP TABLE IF EXISTS category_limits")
     conn.commit()
     conn.close()
