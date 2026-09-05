@@ -1,6 +1,9 @@
 from database import get_conn, get_credits_for_month, get_fixed_for_month
 from datetime import datetime
+from io import StringIO, BytesIO
+import csv
 import telebot
+from common import with_cancel
 
 MONTHS_RU = {
     1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
@@ -57,7 +60,6 @@ def register_report_handlers(bot):
         paid_total = float(c.fetchone()[0])
         conn.close()
 
-        # Сол айдың кредит/тұрақлы суммалары
         credits = get_credits_for_month(date_filter)
         fixed = get_fixed_for_month(date_filter)
         credit_total = sum(float(a) for _, _, a, _ in credits)
@@ -96,8 +98,9 @@ def register_report_handlers(bot):
         text += f"\n──────────────────\n"
         text += f"💰 Қолда бар: <b>{remaining:,.0f} сум</b>"
 
+        markup = telebot.types.InlineKeyboardMarkup()
+
         if is_future:
-            markup = telebot.types.InlineKeyboardMarkup()
             for cid, name, amount, pay_day in credits:
                 markup.row(
                     telebot.types.InlineKeyboardButton(
@@ -127,9 +130,49 @@ def register_report_handlers(bot):
             markup.add(telebot.types.InlineKeyboardButton(
                 "➕ Басқа харажат қосыў", callback_data=f"fao_{date_filter}"
             ))
-            bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode='HTML')
-        else:
-            bot.send_message(call.message.chat.id, text, parse_mode='HTML')
+
+        markup.add(telebot.types.InlineKeyboardButton(
+            "📄 CSV жүклеп алыў", callback_data=f"csvrep_{date_filter}"
+        ))
+
+        bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode='HTML')
+
+    # ЖАҢА: CSV экспорт
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("csvrep_"))
+    def export_csv(call):
+        date_filter = call.data[7:]
+
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT source, amount, created_at FROM budget WHERE created_at LIKE %s",
+                  (f"{date_filter}%",))
+        income_rows = c.fetchall()
+        c.execute("SELECT category, amount, created_at FROM other_expenses WHERE created_at LIKE %s",
+                  (f"{date_filter}%",))
+        other_rows = c.fetchall()
+        conn.close()
+
+        credits = get_credits_for_month(date_filter)
+        fixed = get_fixed_for_month(date_filter)
+
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Түри", "Аты/Дереги", "Сумма", "Сана/Күн"])
+
+        for source, amount, created_at in income_rows:
+            writer.writerow(["Кирис", source, amount, created_at])
+        for cid, name, amount, pay_day in credits:
+            writer.writerow(["Кредит", name, amount, f"{pay_day}-күн"])
+        for fid, name, amount, pay_day in fixed:
+            writer.writerow(["Тұрақлы харажат", name, amount, f"{pay_day}-күн"])
+        for cat, amount, created_at in other_rows:
+            writer.writerow(["Басқа харажат", cat, amount, created_at])
+
+        buf = BytesIO(output.getvalue().encode("utf-8-sig"))
+        buf.name = f"esap_{date_filter}.csv"
+
+        bot.answer_callback_query(call.id, "📄 Таярланды!")
+        bot.send_document(call.message.chat.id, buf, caption=f"📄 {date_filter} есабы (CSV)")
 
     # ✏️ Кредит өзгертиў (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fec_"))
@@ -138,13 +181,13 @@ def register_report_handlers(bot):
         cid = int(parts[1])
         date_filter = f"{parts[2]}-{parts[3]}"
         msg = bot.send_message(call.message.chat.id, "Таза сумма жаз (сум):\nМысалы: 450000")
-        bot.register_next_step_handler(msg, fec_amount, cid, date_filter)
+        bot.register_next_step_handler(msg, with_cancel(bot, fec_amount), cid, date_filter)
 
     def fec_amount(message, cid, date_filter):
         try:
             amount = float(message.text.replace(",", "").replace(" ", ""))
             msg = bot.send_message(message.chat.id, "Төлем күнин жаз (1-31):")
-            bot.register_next_step_handler(msg, fec_day, cid, amount, date_filter)
+            bot.register_next_step_handler(msg, with_cancel(bot, fec_day), cid, amount, date_filter)
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
 
@@ -205,13 +248,13 @@ def register_report_handlers(bot):
         fid = int(parts[1])
         date_filter = f"{parts[2]}-{parts[3]}"
         msg = bot.send_message(call.message.chat.id, "Таза сумма жаз (сум):\nМысалы: 300000")
-        bot.register_next_step_handler(msg, fef_amount, fid, date_filter)
+        bot.register_next_step_handler(msg, with_cancel(bot, fef_amount), fid, date_filter)
 
     def fef_amount(message, fid, date_filter):
         try:
             amount = float(message.text.replace(",", "").replace(" ", ""))
             msg = bot.send_message(message.chat.id, "Төлем күнин жаз (1-31):")
-            bot.register_next_step_handler(msg, fef_day, fid, amount, date_filter)
+            bot.register_next_step_handler(msg, with_cancel(bot, fef_day), fid, amount, date_filter)
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
 
@@ -270,7 +313,7 @@ def register_report_handlers(bot):
     def future_add_credit(call):
         date_filter = call.data[4:]
         msg = bot.send_message(call.message.chat.id, "Таза кредит атын жаз:\nМысалы: Kaspi кредит")
-        bot.register_next_step_handler(msg, fac_name, date_filter)
+        bot.register_next_step_handler(msg, with_cancel(bot, fac_name), date_filter)
 
     def fac_name(message, date_filter):
         name = message.text.strip()
@@ -278,13 +321,13 @@ def register_report_handlers(bot):
             bot.send_message(message.chat.id, "❌ Аты бос болмасын!")
             return
         msg = bot.send_message(message.chat.id, f"💳 {name} суммасын жаз (сум):")
-        bot.register_next_step_handler(msg, fac_amount, name, date_filter)
+        bot.register_next_step_handler(msg, with_cancel(bot, fac_amount), name, date_filter)
 
     def fac_amount(message, name, date_filter):
         try:
             amount = float(message.text.replace(",", "").replace(" ", ""))
             msg = bot.send_message(message.chat.id, "Төлем күнин жаз (1-31):")
-            bot.register_next_step_handler(msg, fac_day, name, amount, date_filter)
+            bot.register_next_step_handler(msg, with_cancel(bot, fac_day), name, amount, date_filter)
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
 
@@ -295,12 +338,10 @@ def register_report_handlers(bot):
                 raise ValueError
             conn = get_conn()
             c = conn.cursor()
-            # Жаңа кредит қосамыз
             c.execute("INSERT INTO credits (name, amount, pay_day, is_active) VALUES (%s,%s,%s,0)",
                       (name, amount, day))
             c.execute("SELECT lastval()")
             new_id = c.fetchone()[0]
-            # Тек сол айға белсенді
             c.execute("INSERT INTO credit_overrides (credit_id, month, amount, pay_day, is_active) VALUES (%s,%s,%s,%s,1)",
                       (new_id, date_filter, amount, day))
             conn.commit()
@@ -318,7 +359,7 @@ def register_report_handlers(bot):
     def future_add_fixed(call):
         date_filter = call.data[4:]
         msg = bot.send_message(call.message.chat.id, "Таза тұрақлы харажат атын жаз:\nМысалы: Интернет")
-        bot.register_next_step_handler(msg, faf_name, date_filter)
+        bot.register_next_step_handler(msg, with_cancel(bot, faf_name), date_filter)
 
     def faf_name(message, date_filter):
         name = message.text.strip()
@@ -326,13 +367,13 @@ def register_report_handlers(bot):
             bot.send_message(message.chat.id, "❌ Аты бос болмасын!")
             return
         msg = bot.send_message(message.chat.id, f"🏠 {name} суммасын жаз (сум):")
-        bot.register_next_step_handler(msg, faf_amount, name, date_filter)
+        bot.register_next_step_handler(msg, with_cancel(bot, faf_amount), name, date_filter)
 
     def faf_amount(message, name, date_filter):
         try:
             amount = float(message.text.replace(",", "").replace(" ", ""))
             msg = bot.send_message(message.chat.id, "Төлем күнин жаз (1-31):")
-            bot.register_next_step_handler(msg, faf_day, name, amount, date_filter)
+            bot.register_next_step_handler(msg, with_cancel(bot, faf_day), name, amount, date_filter)
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
 
@@ -364,7 +405,7 @@ def register_report_handlers(bot):
     def future_add_other(call):
         date_filter = call.data[4:]
         msg = bot.send_message(call.message.chat.id, "Харажат атын жаз:\nМысалы: Коммунал")
-        bot.register_next_step_handler(msg, fao_name, date_filter)
+        bot.register_next_step_handler(msg, with_cancel(bot, fao_name), date_filter)
 
     def fao_name(message, date_filter):
         category = message.text.strip()
@@ -372,7 +413,7 @@ def register_report_handlers(bot):
             bot.send_message(message.chat.id, "❌ Аты бос болмасын!")
             return
         msg = bot.send_message(message.chat.id, f"💸 {category} суммасын жаз (сум):")
-        bot.register_next_step_handler(msg, fao_amount, category, date_filter)
+        bot.register_next_step_handler(msg, with_cancel(bot, fao_amount), category, date_filter)
 
     def fao_amount(message, category, date_filter):
         try:
