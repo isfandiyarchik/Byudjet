@@ -5,13 +5,14 @@ from dotenv import load_dotenv
 from datetime import datetime
 from database import init_db, get_conn, get_credits_for_month, get_fixed_for_month
 from scheduler import start_scheduler
+from backup import generate_backup
+from common import ADMIN_IDS, is_admin, with_cancel
 from handlers.budget import register_budget_handlers
 from handlers.expenses import register_expense_handlers
 from handlers.reports import register_report_handlers
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://byudjet.onrender.com")
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -44,14 +45,28 @@ def start(message):
     c.execute("SELECT * FROM users WHERE telegram_id=%s", (message.from_user.id,))
     user = c.fetchone()
     if not user:
-        is_admin = 1 if message.from_user.id == ADMIN_ID else 0
+        is_admin_flag = 1 if is_admin(message.from_user.id) else 0
         c.execute("INSERT INTO users (telegram_id, name, is_admin, created_at) VALUES (%s,%s,%s,%s)",
-                  (message.from_user.id, message.from_user.first_name, is_admin, str(datetime.now())))
+                  (message.from_user.id, message.from_user.first_name, is_admin_flag, str(datetime.now())))
         conn.commit()
     conn.close()
     bot.send_message(message.chat.id,
                      f"Ассалаума алейкум, {message.from_user.first_name}! 👋\nБюджет ботына хош келдиңиз!",
                      reply_markup=main_menu())
+
+@bot.message_handler(commands=["cancel"])
+def cancel_command(message):
+    bot.clear_step_handler_by_chat_id(message.chat.id)
+    bot.send_message(message.chat.id, "❌ Бийкар етилди.", reply_markup=main_menu())
+
+@bot.message_handler(commands=["backup"])
+def manual_backup(message):
+    if not is_admin(message.from_user.id):
+        bot.send_message(message.chat.id, "❌ Бул тек админ ушын!")
+        return
+    bot.send_message(message.chat.id, "📦 Backup таярланып атыр...")
+    buf = generate_backup()
+    bot.send_document(message.chat.id, buf, caption="📦 Дерекқордың толық резерв көширмеси (JSON)")
 
 @bot.message_handler(func=lambda m: m.text == "🏠 Баслапқы бет")
 def dashboard(message):
@@ -60,7 +75,8 @@ def dashboard(message):
 
     month = datetime.now().strftime("%Y-%m")
 
-    c.execute("SELECT COALESCE(SUM(amount),0) FROM budget")
+    c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
+              (f"{month}%",))
     total_income = float(c.fetchone()[0])
 
     c.execute("SELECT COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s",
@@ -85,7 +101,6 @@ def dashboard(message):
 
     conn.close()
 
-    # Осы айдың кредит/тұрақлы суммалары
     credits = get_credits_for_month(month)
     fixed = get_fixed_for_month(month)
 
@@ -141,7 +156,7 @@ def dashboard(message):
 
 @bot.message_handler(func=lambda m: m.text == "⚙️ Өзгертиў")
 def settings(message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         bot.send_message(message.chat.id, "❌ Бул бөлим тек админ ушын!")
         return
     markup = telebot.types.InlineKeyboardMarkup()
@@ -151,7 +166,64 @@ def settings(message):
     markup.add(telebot.types.InlineKeyboardButton("🗑 Тұрақлы харажат ошириу", callback_data="del_fixed"))
     markup.add(telebot.types.InlineKeyboardButton("➕ Таза кредит қосыў", callback_data="add_credit"))
     markup.add(telebot.types.InlineKeyboardButton("➕ Таза тұрақлы қосыў", callback_data="add_fixed"))
+    markup.add(telebot.types.InlineKeyboardButton("🗑 Соңғы харажатларды көриу/өшириу", callback_data="view_recent_other"))
+    markup.add(telebot.types.InlineKeyboardButton("📊 Категория лимити қою", callback_data="set_cat_limit"))
+    markup.add(telebot.types.InlineKeyboardButton("📦 Backup жүклеп алыў", callback_data="do_backup"))
     bot.send_message(message.chat.id, "⚙️ Не өзгертесиз?", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "do_backup")
+def backup_button(call):
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "❌ Бул тек админ ушын!")
+        return
+    bot.answer_callback_query(call.id, "📦 Таярланып атыр...")
+    buf = generate_backup()
+    bot.send_document(call.message.chat.id, buf, caption="📦 Дерекқордың толық резерв көширмеси (JSON)")
+
+# ------------------- Категория лимити -------------------
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_cat_limit")
+def set_cat_limit_menu(call):
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "❌ Бул тек админ ушын!")
+        return
+    from database import get_all_category_limits
+    limits = get_all_category_limits()
+    text = "📊 <b>Хәзирги категория лимитлери:</b>\n\n"
+    if limits:
+        for cat, amt in limits:
+            text += f"  • {cat}: <b>{float(amt):,.0f} сум</b>/ай\n"
+    else:
+        text += "  Ҳеш қандай лимит қойылмаған.\n"
+    bot.send_message(call.message.chat.id, text, parse_mode='HTML')
+    msg = bot.send_message(call.message.chat.id,
+                          "Қайси категорияға лимит қоямыз?\nАтын жазың (мысалы: 🛒 Азық-аўқат):")
+    bot.register_next_step_handler(msg, with_cancel(bot, cat_limit_name))
+
+def cat_limit_name(message):
+    category = message.text.strip()
+    if not category:
+        bot.send_message(message.chat.id, "❌ Категория аты бос болмасын!")
+        return
+    msg = bot.send_message(message.chat.id, f"💰 {category} ушын айлық лимит сумасын жаз (сум):\nМысалы: 2000000\n(лимитти өшириў ушын: 0)")
+    bot.register_next_step_handler(msg, with_cancel(bot, cat_limit_amount), category)
+
+def cat_limit_amount(message, category):
+    from database import set_category_limit, delete_category_limit
+    try:
+        amount = float(message.text.replace(",", "").replace(" ", ""))
+        if amount <= 0:
+            delete_category_limit(category)
+            bot.send_message(message.chat.id, f"✅ {category} ушын лимит өширилди.")
+        else:
+            set_category_limit(category, amount)
+            bot.send_message(message.chat.id,
+                             f"✅ Лимит қойылды!\n• {category}: <b>{amount:,.0f} сум</b>/ай",
+                             parse_mode='HTML')
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
+
+# ------------------- Кредит/Тұрақлы басқарыў -------------------
 
 @bot.callback_query_handler(func=lambda call: call.data == "set_credit")
 def set_credit_menu(call):
@@ -219,13 +291,13 @@ def delete_fixed(call):
 def edit_credit(call):
     cid = int(call.data.split("_")[1])
     msg = bot.send_message(call.message.chat.id, "Таза сумма жаз (сум):\nМысалы: 450000")
-    bot.register_next_step_handler(msg, save_credit_amount, cid)
+    bot.register_next_step_handler(msg, with_cancel(bot, save_credit_amount), cid)
 
 def save_credit_amount(message, cid):
     try:
         amount = float(message.text.replace(",", "").replace(" ", ""))
         msg = bot.send_message(message.chat.id, "Төлем число күнин жаз (1-31):\nМысалы: 15")
-        bot.register_next_step_handler(msg, save_credit_day, cid, amount)
+        bot.register_next_step_handler(msg, with_cancel(bot, save_credit_day), cid, amount)
     except ValueError:
         bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
 
@@ -264,13 +336,13 @@ def set_fixed_menu(call):
 def edit_fixed(call):
     fid = int(call.data.split("_")[1])
     msg = bot.send_message(call.message.chat.id, "Таза сумма жаз (сум):\nМысалы: 600000")
-    bot.register_next_step_handler(msg, save_fixed_amount, fid)
+    bot.register_next_step_handler(msg, with_cancel(bot, save_fixed_amount), fid)
 
 def save_fixed_amount(message, fid):
     try:
         amount = float(message.text.replace(",", "").replace(" ", ""))
         msg = bot.send_message(message.chat.id, "Төлем число күнин жаз (1-31):\nМысалы: 5")
-        bot.register_next_step_handler(msg, save_fixed_day, fid, amount)
+        bot.register_next_step_handler(msg, with_cancel(bot, save_fixed_day), fid, amount)
     except ValueError:
         bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
 
@@ -296,7 +368,7 @@ def save_fixed_day(message, fid, amount):
 @bot.callback_query_handler(func=lambda call: call.data == "add_credit")
 def add_credit_start(call):
     msg = bot.send_message(call.message.chat.id, "Таза кредит атын жаз:\nМысалы: Kaspi кредит")
-    bot.register_next_step_handler(msg, add_credit_name)
+    bot.register_next_step_handler(msg, with_cancel(bot, add_credit_name))
 
 def add_credit_name(message):
     name = message.text.strip()
@@ -304,13 +376,13 @@ def add_credit_name(message):
         bot.send_message(message.chat.id, "❌ Аты бос болмасын!")
         return
     msg = bot.send_message(message.chat.id, f"💳 {name} суммасын жаз (сум):\nМысалы: 500000")
-    bot.register_next_step_handler(msg, add_credit_amount, name)
+    bot.register_next_step_handler(msg, with_cancel(bot, add_credit_amount), name)
 
 def add_credit_amount(message, name):
     try:
         amount = float(message.text.replace(",", "").replace(" ", ""))
         msg = bot.send_message(message.chat.id, "Төлем число күнин жаз (1-31):\nМысалы: 10")
-        bot.register_next_step_handler(msg, add_credit_day, name, amount)
+        bot.register_next_step_handler(msg, with_cancel(bot, add_credit_day), name, amount)
     except ValueError:
         bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
 
@@ -337,7 +409,7 @@ def add_credit_day(message, name, amount):
 @bot.callback_query_handler(func=lambda call: call.data == "add_fixed")
 def add_fixed_start(call):
     msg = bot.send_message(call.message.chat.id, "Таза тұрақлы харажат атын жаз:\nМысалы: Интернет")
-    bot.register_next_step_handler(msg, add_fixed_name)
+    bot.register_next_step_handler(msg, with_cancel(bot, add_fixed_name))
 
 def add_fixed_name(message):
     name = message.text.strip()
@@ -345,13 +417,13 @@ def add_fixed_name(message):
         bot.send_message(message.chat.id, "❌ Аты бос болмасын!")
         return
     msg = bot.send_message(message.chat.id, f"🏠 {name} суммасын жаз (сум):\nМысалы: 200000")
-    bot.register_next_step_handler(msg, add_fixed_amount, name)
+    bot.register_next_step_handler(msg, with_cancel(bot, add_fixed_amount), name)
 
 def add_fixed_amount(message, name):
     try:
         amount = float(message.text.replace(",", "").replace(" ", ""))
         msg = bot.send_message(message.chat.id, "Төлем число күнин жаз (1-31):\nМысалы: 5")
-        bot.register_next_step_handler(msg, add_fixed_day, name, amount)
+        bot.register_next_step_handler(msg, with_cancel(bot, add_fixed_day), name, amount)
     except ValueError:
         bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
 
@@ -378,7 +450,7 @@ def add_fixed_day(message, name, amount):
 register_budget_handlers(bot)
 register_expense_handlers(bot)
 register_report_handlers(bot)
-start_scheduler(bot, ADMIN_ID)
+start_scheduler(bot, ADMIN_IDS)
 
 if __name__ == "__main__":
     bot.remove_webhook()
