@@ -11,7 +11,7 @@ def register_budget_handlers(bot):
         markup.add(telebot.types.InlineKeyboardButton("☀️ Солнечный панель", callback_data="bdg_solar"))
         markup.add(telebot.types.InlineKeyboardButton("🤝 Жәрдем пул", callback_data="bdg_jardem"))
         markup.add(telebot.types.InlineKeyboardButton("📥 Басқа", callback_data="bdg_baska"))
-        bot.send_message(message.chat.id, "Бюджет дерегин таңла:", reply_markup=markup)
+        bot.send_message(message.chat.id, "Кай Бюджет таңласыз:", reply_markup=markup)
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("bdg_"))
     def budget_amount(call):
