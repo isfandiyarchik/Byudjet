@@ -4,6 +4,8 @@ from io import StringIO, BytesIO
 import csv
 import telebot
 from common import with_cancel
+from chart import generate_expense_pie_chart
+from yearly_report import generate_yearly_report
 
 MONTHS_RU = {
     1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
@@ -17,6 +19,9 @@ def register_report_handlers(bot):
     def report_period(message):
         now = datetime.now()
         markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton(
+            f"📅 {now.year} жылдық толық Excel есабы", callback_data=f"yearxlsx_{now.year}"
+        ))
         for month_num in range(1, 13):
             year = now.year
             month_str = f"{year}-{month_num:02d}"
@@ -134,8 +139,51 @@ def register_report_handlers(bot):
         markup.add(telebot.types.InlineKeyboardButton(
             "📄 CSV жүклеп алыў", callback_data=f"csvrep_{date_filter}"
         ))
+        markup.add(telebot.types.InlineKeyboardButton(
+            "📊 Диаграмма көриу", callback_data=f"chartrep_{date_filter}"
+        ))
 
         bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode='HTML')
+
+    # ЖАҢА: айлық харажат диаграммасы (pie chart)
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("chartrep_"))
+    def show_chart(call):
+        date_filter = call.data[9:]
+
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT category, COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s GROUP BY category",
+                  (f"{date_filter}%",))
+        other_by_cat = c.fetchall()
+        conn.close()
+
+        credits = get_credits_for_month(date_filter)
+        fixed = get_fixed_for_month(date_filter)
+
+        labeled = []
+        for cid, name, amount, pay_day in credits:
+            labeled.append((f"🔴 {name}", float(amount)))
+        for fid, name, amount, pay_day in fixed:
+            labeled.append((f"🟡 {name}", float(amount)))
+        for cat, amount in other_by_cat:
+            labeled.append((cat, float(amount)))
+
+        buf = generate_expense_pie_chart(date_filter, labeled)
+        if buf is None:
+            bot.answer_callback_query(call.id, "Бул айда харажат жоқ — диаграмма салынбайды.")
+            return
+
+        bot.answer_callback_query(call.id, "📊 Таярланды!")
+        bot.send_photo(call.message.chat.id, buf, caption=f"📊 {date_filter} харажатлар бөлистириўи")
+
+    # ЖАҢА: толық жылдық Excel есабы (12 парақ + график)
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("yearxlsx_"))
+    def yearly_excel(call):
+        year = int(call.data[9:])
+        bot.answer_callback_query(call.id, "📅 Таярланып атыр, бир аз күтиң...")
+        buf = generate_yearly_report(year)
+        bot.send_document(call.message.chat.id, buf,
+                          caption=f"📅 {year} жылдың толық есабы (ҳәр ай — бөлек парақ, график пенен)")
 
     # ЖАҢА: CSV экспорт
     @bot.callback_query_handler(func=lambda call: call.data.startswith("csvrep_"))
