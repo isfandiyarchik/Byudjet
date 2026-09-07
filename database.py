@@ -4,42 +4,61 @@ import os
 def get_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"))
 
-def get_credits_for_month(month):
-    conn = get_conn()
+def get_credits_for_month(month, conn=None):
+    """
+    ТҮЗЕТИЛДИ (тезлик): бурын ҳәр бир кредит ушын бөлек-бөлек override сораўы
+    ислейтин еди (1+N сораў). Енди барлық override бир ғана сораў менен алынады.
+    conn: егер сыртта әллекашан ашылған байланыс болса, соны бериңиз —
+    сонда бул функция өз алдына жаңа байланыс ашпайды (dashboard т.б. жерде тезирек ислейди).
+    """
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
     c = conn.cursor()
     c.execute("SELECT id, name, amount, pay_day FROM credits WHERE is_active=1")
     credits = c.fetchall()
+
+    c.execute("SELECT credit_id, amount, pay_day, is_active FROM credit_overrides WHERE month=%s", (month,))
+    overrides = {row[0]: (row[1], row[2], row[3]) for row in c.fetchall()}
+
     result = []
     for cid, name, amount, pay_day in credits:
-        c.execute("SELECT amount, pay_day, is_active FROM credit_overrides WHERE credit_id=%s AND month=%s",
-                  (cid, month))
-        override = c.fetchone()
-        if override:
-            if override[2] == 0:
+        if cid in overrides:
+            o_amount, o_pay_day, o_active = overrides[cid]
+            if o_active == 0:
                 continue
-            result.append((cid, name, float(override[0]), override[1]))
+            result.append((cid, name, float(o_amount), o_pay_day))
         else:
             result.append((cid, name, float(amount), pay_day))
-    conn.close()
+
+    if own_conn:
+        conn.close()
     return result
 
-def get_fixed_for_month(month):
-    conn = get_conn()
+def get_fixed_for_month(month, conn=None):
+    """Тезлик ушын get_credits_for_month менен бирдей принцип (жоқарыны қараң)."""
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
     c = conn.cursor()
     c.execute("SELECT id, name, amount, pay_day FROM fixed_expenses WHERE is_active=1")
     fixed = c.fetchall()
+
+    c.execute("SELECT fixed_id, amount, pay_day, is_active FROM fixed_overrides WHERE month=%s", (month,))
+    overrides = {row[0]: (row[1], row[2], row[3]) for row in c.fetchall()}
+
     result = []
     for fid, name, amount, pay_day in fixed:
-        c.execute("SELECT amount, pay_day, is_active FROM fixed_overrides WHERE fixed_id=%s AND month=%s",
-                  (fid, month))
-        override = c.fetchone()
-        if override:
-            if override[2] == 0:
+        if fid in overrides:
+            o_amount, o_pay_day, o_active = overrides[fid]
+            if o_active == 0:
                 continue
-            result.append((fid, name, float(override[0]), override[1]))
+            result.append((fid, name, float(o_amount), o_pay_day))
         else:
             result.append((fid, name, float(amount), pay_day))
-    conn.close()
+
+    if own_conn:
+        conn.close()
     return result
 
 def get_category_limit(category):
