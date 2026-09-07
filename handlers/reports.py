@@ -63,10 +63,12 @@ def register_report_handlers(bot):
         c.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE month=%s AND status='paid'",
                   (date_filter,))
         paid_total = float(c.fetchone()[0])
+
+        # ТҮЗЕТИЛДИ (тезлик): сол ашық турған байланыстың өзи қайта пайдаланылады
+        credits = get_credits_for_month(date_filter, conn=conn)
+        fixed = get_fixed_for_month(date_filter, conn=conn)
         conn.close()
 
-        credits = get_credits_for_month(date_filter)
-        fixed = get_fixed_for_month(date_filter)
         credit_total = sum(float(a) for _, _, a, _ in credits)
         fixed_total = sum(float(a) for _, _, a, _ in fixed)
 
@@ -155,10 +157,10 @@ def register_report_handlers(bot):
         c.execute("SELECT category, COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s GROUP BY category",
                   (f"{date_filter}%",))
         other_by_cat = c.fetchall()
-        conn.close()
 
-        credits = get_credits_for_month(date_filter)
-        fixed = get_fixed_for_month(date_filter)
+        credits = get_credits_for_month(date_filter, conn=conn)
+        fixed = get_fixed_for_month(date_filter, conn=conn)
+        conn.close()
 
         labeled = []
         for cid, name, amount, pay_day in credits:
@@ -198,10 +200,10 @@ def register_report_handlers(bot):
         c.execute("SELECT category, amount, created_at FROM other_expenses WHERE created_at LIKE %s",
                   (f"{date_filter}%",))
         other_rows = c.fetchall()
-        conn.close()
 
-        credits = get_credits_for_month(date_filter)
-        fixed = get_fixed_for_month(date_filter)
+        credits = get_credits_for_month(date_filter, conn=conn)
+        fixed = get_fixed_for_month(date_filter, conn=conn)
+        conn.close()
 
         output = StringIO()
         writer = csv.writer(output)
