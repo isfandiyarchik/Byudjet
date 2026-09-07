@@ -70,6 +70,9 @@ def manual_backup(message):
 
 @bot.message_handler(func=lambda m: m.text == "🏠 Баслапқы бет")
 def dashboard(message):
+    # "жазып атыр..." индикаторы дереу көринеди — сораўлар таярланып атырғанда экран бос болмайды
+    bot.send_chat_action(message.chat.id, 'typing')
+
     conn = get_conn()
     c = conn.cursor()
 
@@ -79,27 +82,22 @@ def dashboard(message):
               (f"{month}%",))
     total_income = float(c.fetchone()[0])
 
-    c.execute("SELECT COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s",
-              (f"{month}%",))
-    other = float(c.fetchone()[0])
-
+    # ТҮЗЕТИЛДИ (тезлик): "other" жәми сумма ушын бөлек сораў керек емес,
+    # category-бойынша тизимнен Python-да есапланады (1 сораў үнемленди)
     c.execute("SELECT category, COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s GROUP BY category",
               (f"{month}%",))
     other_by_cat = c.fetchall()
+    other = sum(float(a) for _, a in other_by_cat)
 
-    c.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE month=%s AND status='paid'",
+    # ТҮЗЕТИЛДИ (тезлик): бурын 3 бөлек сораў (paid_total, paid_credit_ids, paid_fixed_ids)
+    # ислейтин еди, енди барлығы бир ғана сораўдан алынады (2 сораў үнемленди)
+    c.execute("SELECT type, ref_id, amount FROM payments WHERE month=%s AND status='paid'",
               (month,))
-    paid_total = float(c.fetchone()[0])
+    payment_rows = c.fetchall()
+    paid_total = sum(float(a) for _, _, a in payment_rows)
+    paid_credit_ids = [ref_id for ptype, ref_id, _ in payment_rows if ptype == 'credit']
+    paid_fixed_ids = [ref_id for ptype, ref_id, _ in payment_rows if ptype == 'fixed']
 
-    c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='credit'",
-              (month,))
-    paid_credit_ids = [row[0] for row in c.fetchall()]
-
-    c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='fixed'",
-              (month,))
-    paid_fixed_ids = [row[0] for row in c.fetchall()]
-
-    # ТҮЗЕТИЛДИ (тезлик): бир ғана байланыс арқалы алынады (бурын 3 бөлек байланыс ашылатын еди)
     credits = get_credits_for_month(month, conn=conn)
     fixed = get_fixed_for_month(month, conn=conn)
     conn.close()
