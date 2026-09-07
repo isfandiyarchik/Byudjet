@@ -99,10 +99,10 @@ def dashboard(message):
               (month,))
     paid_fixed_ids = [row[0] for row in c.fetchall()]
 
+    # ТҮЗЕТИЛДИ (тезлик): бир ғана байланыс арқалы алынады (бурын 3 бөлек байланыс ашылатын еди)
+    credits = get_credits_for_month(month, conn=conn)
+    fixed = get_fixed_for_month(month, conn=conn)
     conn.close()
-
-    credits = get_credits_for_month(month)
-    fixed = get_fixed_for_month(month)
 
     credit_total = sum(float(a) for _, _, a, _ in credits)
     fixed_total = sum(float(a) for _, _, a, _ in fixed)
