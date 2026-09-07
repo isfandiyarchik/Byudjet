@@ -42,10 +42,13 @@ def generate_yearly_report(year):
                         "Басқа харажатлар", "Жалпы харажат", "Қалды"])
     _style_header_row(summary_ws)
 
+    # ТҮЗЕТИЛДИ (тезлик): бурын ҳәр ай ушын 3 бөлек байланыс ашылатын еди (12 айға — 36 байланыс).
+    # Енди бир ғана байланыс барлық 12 айға бирдей қолланылады.
+    conn = get_conn()
+
     for month_num in range(1, 13):
         date_filter = f"{year}-{month_num:02d}"
 
-        conn = get_conn()
         c = conn.cursor()
         c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
                   (f"{date_filter}%",))
@@ -54,12 +57,11 @@ def generate_yearly_report(year):
         c.execute("SELECT category, COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s GROUP BY category",
                   (f"{date_filter}%",))
         other_by_cat = c.fetchall()
-        conn.close()
 
         other_total = sum(float(a) for _, a in other_by_cat)
 
-        credits = get_credits_for_month(date_filter)
-        fixed = get_fixed_for_month(date_filter)
+        credits = get_credits_for_month(date_filter, conn=conn)
+        fixed = get_fixed_for_month(date_filter, conn=conn)
         credit_total = sum(float(a) for _, _, a, _ in credits)
         fixed_total = sum(float(a) for _, _, a, _ in fixed)
         total_expense = credit_total + fixed_total + other_total
@@ -90,6 +92,8 @@ def generate_yearly_report(year):
         ws.append(["Қалды", "", remaining])
         _autosize_columns(ws)
 
+    conn.close()
+
     # ---- Bar chart on the summary sheet ----
     chart = BarChart()
     chart.type = "col"
@@ -112,4 +116,3 @@ def generate_yearly_report(year):
     buf.seek(0)
     buf.name = f"jyldyq_esap_{year}.xlsx"
     return buf
-
