@@ -36,7 +36,7 @@ def register_report_handlers(bot):
             ))
         bot.send_message(message.chat.id, "Есап дәўирин таңла:", reply_markup=markup)
 
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("rep_") and len(call.data) == 11)
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("rep_") and len(call.data) == 12)
     def show_report(call):
         date_filter = call.data[4:]
         year = int(date_filter.split("-")[0])
