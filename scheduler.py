@@ -1,7 +1,7 @@
 import telebot
 from apscheduler.schedulers.background import BackgroundScheduler
 from pytz import timezone
-from database import get_conn
+from database import get_conn, get_credits_for_month, get_fixed_for_month
 from datetime import datetime, timedelta
 from backup import generate_backup
 
@@ -24,14 +24,14 @@ def daily_backup(bot, admin_ids):
     print(f"📦 Күнделикли backup таярланып атыр... {datetime.now(UZ_TZ)}")
     for admin_id in admin_ids:
         try:
-            buf = generate_backup()  # regenerate per-recipient (BytesIO cursor safety)
+            buf = generate_backup()
             bot.send_document(admin_id, buf, caption="📦 Автоматлық күнделикли backup")
             print(f"✅ Backup жиберилди: {admin_id}")
         except Exception as e:
             print(f"❌ Backup жиберилмеди {admin_id}: {e}")
 
 def morning_summary(bot):
-    print(f"🌅 Таңертең хабарлама жиберилди... {datetime.now(UZ_TZ)}")
+    print(f"🌅 Азанда хабарлама жиберилди... {datetime.now(UZ_TZ)}")
     conn = get_conn()
     c = conn.cursor()
 
@@ -40,12 +40,6 @@ def morning_summary(bot):
     c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
               (f"{month}%",))
     total_income = float(c.fetchone()[0])
-
-    c.execute("SELECT id, name, amount, pay_day FROM credits WHERE is_active=1")
-    credits = c.fetchall()
-
-    c.execute("SELECT id, name, amount, pay_day FROM fixed_expenses WHERE is_active=1")
-    fixed = c.fetchall()
 
     c.execute("SELECT COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s",
               (f"{month}%",))
@@ -70,6 +64,10 @@ def morning_summary(bot):
     c.execute("SELECT telegram_id FROM users")
     users = c.fetchall()
     conn.close()
+
+    # Override ескеретін функциялар
+    credits = get_credits_for_month(month)
+    fixed = get_fixed_for_month(month)
 
     credit_total = sum(float(a) for _, _, a, _ in credits)
     fixed_total = sum(float(a) for _, _, a, _ in fixed)
@@ -123,7 +121,7 @@ def morning_summary(bot):
     for (telegram_id,) in users:
         try:
             bot.send_message(telegram_id, text, parse_mode='HTML')
-            print(f"✅ Таңертең хабар жиберилди: {telegram_id}")
+            print(f"✅ Азанда хабар жиберилди: {telegram_id}")
         except Exception as e:
             print(f"❌ Қате: {e}")
 
@@ -178,14 +176,16 @@ def monthly_payment_reminder(bot, admin_ids):
     print(f"📅 Ай басы ескертиуи... {datetime.now(UZ_TZ)}")
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT id, name, amount FROM credits WHERE is_active=1")
-    credits = c.fetchall()
-    c.execute("SELECT id, name, amount FROM fixed_expenses WHERE is_active=1")
-    fixed = c.fetchall()
+
+    month = datetime.now(UZ_TZ).strftime("%Y-%m")
+
+    # Override ескеретін функциялар
+    credits = get_credits_for_month(month)
+    fixed = get_fixed_for_month(month)
+
     c.execute("SELECT telegram_id FROM users")
     users = c.fetchall()
 
-    month = datetime.now(UZ_TZ).strftime("%Y-%m")
     c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='credit'", (month,))
     paid_credit_ids = {row[0] for row in c.fetchall()}
     c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='fixed'", (month,))
@@ -195,7 +195,7 @@ def monthly_payment_reminder(bot, admin_ids):
     markup = telebot.types.InlineKeyboardMarkup()
     text = "📅 <b>Таза ай басланды!</b>\nТөлемлерди раслаң:\n\n"
 
-    for cid, name, amount in credits:
+    for cid, name, amount, pay_day in credits:
         text += f"💳 {name}: <b>{float(amount):,.0f} сум</b>\n"
         if cid not in paid_credit_ids:
             markup.add(telebot.types.InlineKeyboardButton(
@@ -203,7 +203,7 @@ def monthly_payment_reminder(bot, admin_ids):
                 callback_data=f"pc_{cid}"
             ))
 
-    for fid, name, amount in fixed:
+    for fid, name, amount, pay_day in fixed:
         text += f"🏠 {name}: <b>{float(amount):,.0f} сум</b>\n"
         if fid not in paid_fixed_ids:
             markup.add(telebot.types.InlineKeyboardButton(
