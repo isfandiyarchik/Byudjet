@@ -4,62 +4,83 @@ import os
 def get_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"))
 
-def get_credits_for_month(month, conn=None):
+def _items_for_month(base_table, ov_table, fk, month, conn=None):
     """
-    ТҮЗЕТИЛДИ (тезлик): бурын ҳәр бир кредит ушын бөлек-бөлек override сораўы
-    ислейтин еди (1+N сораў). Енди барлық override бир ғана сораў менен алынады.
-    conn: егер сыртта әллекашан ашылған байланыс болса, соны бериңиз —
-    сонда бул функция өз алдына жаңа байланыс ашпайды (dashboard т.б. жерде тезирек ислейди).
+    Кредит ҳәм тұрақлы харажат ушын ортақ логика.
+    - Сол айға жазылған override бар болса — сол қолланылады.
+    - Override жоқ болса — тек is_active=1 болған тийкарғы жазба алынады.
+    - Тек бир айға қосылған жазба (base is_active=0 + сол айда active override)
+      сол айда көринеди, басқа айларда көринбейди.
     """
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT id, name, amount, pay_day FROM credits WHERE is_active=1")
-    credits = c.fetchall()
+    c.execute(f"SELECT id, name, amount, pay_day, is_active FROM {base_table} ORDER BY id")
+    base = c.fetchall()
 
-    c.execute("SELECT credit_id, amount, pay_day, is_active FROM credit_overrides WHERE month=%s", (month,))
+    c.execute(f"SELECT {fk}, amount, pay_day, is_active FROM {ov_table} WHERE month=%s", (month,))
     overrides = {row[0]: (row[1], row[2], row[3]) for row in c.fetchall()}
 
     result = []
-    for cid, name, amount, pay_day in credits:
-        if cid in overrides:
-            o_amount, o_pay_day, o_active = overrides[cid]
+    for iid, name, amount, pay_day, is_active in base:
+        if iid in overrides:
+            o_amount, o_pay_day, o_active = overrides[iid]
             if o_active == 0:
                 continue
-            result.append((cid, name, float(o_amount), o_pay_day))
-        else:
-            result.append((cid, name, float(amount), pay_day))
+            result.append((iid, name, float(o_amount), o_pay_day))
+        elif is_active == 1:
+            result.append((iid, name, float(amount), pay_day))
 
     if own_conn:
         conn.close()
     return result
+
+
+def get_credits_for_month(month, conn=None):
+    return _items_for_month("credits", "credit_overrides", "credit_id", month, conn)
+
 
 def get_fixed_for_month(month, conn=None):
-    """Тезлик ушын get_credits_for_month менен бирдей принцип (жоқарыны қараң)."""
-    own_conn = conn is None
-    if own_conn:
-        conn = get_conn()
+    return _items_for_month("fixed_expenses", "fixed_overrides", "fixed_id", month, conn)
+
+
+def freeze_past_months(kind, item_id, conn):
+    """
+    Тийкарғы (глобал) жазба өзгертилгенде/өширилгенде өткен айлардың есабы
+    өзгерип кетпеўи ушын, ески мәнислер сол айларға override сыпатында сақланады.
+    kind: 'credit' | 'fixed'. conn: ашық байланыс (commit-ти шақырыўшы өзи етеди).
+    Бул функция өзгертиўден АЛДЫН шақырылыўы керек.
+    """
+    from datetime import datetime
+    current = datetime.now().strftime("%Y-%m")
+    if kind == "credit":
+        base_table, ov_table, fk = "credits", "credit_overrides", "credit_id"
+    else:
+        base_table, ov_table, fk = "fixed_expenses", "fixed_overrides", "fixed_id"
     c = conn.cursor()
-    c.execute("SELECT id, name, amount, pay_day FROM fixed_expenses WHERE is_active=1")
-    fixed = c.fetchall()
+    c.execute(f"SELECT amount, pay_day, is_active FROM {base_table} WHERE id=%s", (item_id,))
+    row = c.fetchone()
+    if not row or row[2] != 1:
+        return
+    amount, pay_day, _ = row
 
-    c.execute("SELECT fixed_id, amount, pay_day, is_active FROM fixed_overrides WHERE month=%s", (month,))
-    overrides = {row[0]: (row[1], row[2], row[3]) for row in c.fetchall()}
+    # Өткен айлар: төлем, кирис ямаса харажат жазбасы бар айлар
+    c.execute("SELECT DISTINCT month FROM payments WHERE month < %s", (current,))
+    months = {r[0] for r in c.fetchall() if r[0]}
+    c.execute("SELECT DISTINCT SUBSTRING(created_at, 1, 7) FROM budget")
+    months |= {r[0] for r in c.fetchall() if r[0] and r[0] < current}
+    c.execute("SELECT DISTINCT SUBSTRING(created_at, 1, 7) FROM other_expenses")
+    months |= {r[0] for r in c.fetchall() if r[0] and r[0] < current}
 
-    result = []
-    for fid, name, amount, pay_day in fixed:
-        if fid in overrides:
-            o_amount, o_pay_day, o_active = overrides[fid]
-            if o_active == 0:
-                continue
-            result.append((fid, name, float(o_amount), o_pay_day))
-        else:
-            result.append((fid, name, float(amount), pay_day))
+    for m in sorted(months):
+        c.execute(f"SELECT id FROM {ov_table} WHERE {fk}=%s AND month=%s", (item_id, m))
+        if c.fetchone():
+            continue
+        c.execute(
+            f"INSERT INTO {ov_table} ({fk}, month, amount, pay_day, is_active) VALUES (%s,%s,%s,%s,1)",
+            (item_id, m, amount, pay_day))
 
-    if own_conn:
-        conn.close()
-    return result
 
 def get_category_limit(category):
     """Returns the monthly limit (float) for a category, or None if not set."""
