@@ -3,7 +3,7 @@ import os
 from flask import Flask, request
 from dotenv import load_dotenv
 from datetime import datetime
-from database import init_db, get_conn, get_credits_for_month, get_fixed_for_month
+from database import init_db, get_conn, get_credits_for_month, get_fixed_for_month, freeze_past_months
 from scheduler import start_scheduler
 from backup import generate_backup
 from common import ADMIN_IDS, is_admin, with_cancel
@@ -254,7 +254,10 @@ def delete_credit(call):
     c = conn.cursor()
     c.execute("SELECT name FROM credits WHERE id=%s", (cid,))
     name = c.fetchone()[0]
+    freeze_past_months("credit", cid, conn)
     c.execute("UPDATE credits SET is_active=0 WHERE id=%s", (cid,))
+    c.execute("DELETE FROM credit_overrides WHERE credit_id=%s AND month >= %s",
+              (cid, datetime.now().strftime("%Y-%m")))
     conn.commit()
     conn.close()
     bot.answer_callback_query(call.id, f"✅ {name} оширилди!")
@@ -279,7 +282,10 @@ def delete_fixed(call):
     c = conn.cursor()
     c.execute("SELECT name FROM fixed_expenses WHERE id=%s", (fid,))
     name = c.fetchone()[0]
+    freeze_past_months("fixed", fid, conn)
     c.execute("UPDATE fixed_expenses SET is_active=0 WHERE id=%s", (fid,))
+    c.execute("DELETE FROM fixed_overrides WHERE fixed_id=%s AND month >= %s",
+              (fid, datetime.now().strftime("%Y-%m")))
     conn.commit()
     conn.close()
     bot.answer_callback_query(call.id, f"✅ {name} оширилди!")
@@ -306,6 +312,7 @@ def save_credit_day(message, cid, amount):
             raise ValueError
         conn = get_conn()
         c = conn.cursor()
+        freeze_past_months("credit", cid, conn)  # өткен айлар өзгермесин
         c.execute("UPDATE credits SET amount=%s, pay_day=%s WHERE id=%s",
                   (amount, day, cid))
         conn.commit()
@@ -351,6 +358,7 @@ def save_fixed_day(message, fid, amount):
             raise ValueError
         conn = get_conn()
         c = conn.cursor()
+        freeze_past_months("fixed", fid, conn)  # өткен айлар өзгермесин
         c.execute("UPDATE fixed_expenses SET amount=%s, pay_day=%s WHERE id=%s",
                   (amount, day, fid))
         conn.commit()
