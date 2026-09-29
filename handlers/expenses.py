@@ -1,4 +1,4 @@
-from database import get_conn, get_category_limit
+from database import get_conn, get_category_limit, get_credits_for_month, get_fixed_for_month
 from datetime import datetime
 import telebot
 from common import is_admin, with_cancel
@@ -22,8 +22,7 @@ def register_expense_handlers(bot):
         month = datetime.now().strftime("%Y-%m")
         conn = get_conn()
         c = conn.cursor()
-        c.execute("SELECT id, name, amount FROM credits WHERE is_active=1")
-        credits = c.fetchall()
+        credits = [(cid, name, amount) for cid, name, amount, _ in get_credits_for_month(month, conn=conn)]
         c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='credit'", (month,))
         paid_ids = {row[0] for row in c.fetchall()}
         conn.close()
@@ -48,8 +47,7 @@ def register_expense_handlers(bot):
         month = datetime.now().strftime("%Y-%m")
         conn = get_conn()
         c = conn.cursor()
-        c.execute("SELECT id, name, amount FROM fixed_expenses WHERE is_active=1")
-        fixed = c.fetchall()
+        fixed = [(fid, name, amount) for fid, name, amount, _ in get_fixed_for_month(month, conn=conn)]
         c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='fixed'", (month,))
         paid_ids = {row[0] for row in c.fetchall()}
         conn.close()
@@ -203,8 +201,11 @@ def register_expense_handlers(bot):
             bot.answer_callback_query(call.id, "⚠️ Бул кредит бул айда әллекашан төленген!")
             return
 
-        c.execute("SELECT name, amount FROM credits WHERE id=%s", (cid,))
-        credit = c.fetchone()
+        credit = next(((n, a) for i, n, a, _ in get_credits_for_month(month, conn=conn) if i == cid), None)
+        if credit is None:
+            conn.close()
+            bot.answer_callback_query(call.id, "❌ Бул кредит бул айда жоқ!")
+            return
 
         c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
                   (f"{month}%",))
@@ -263,8 +264,11 @@ def register_expense_handlers(bot):
             bot.answer_callback_query(call.id, "⚠️ Бул харажат бул айда әллекашан төленген!")
             return
 
-        c.execute("SELECT name, amount FROM fixed_expenses WHERE id=%s", (fid,))
-        fixed = c.fetchone()
+        fixed = next(((n, a) for i, n, a, _ in get_fixed_for_month(month, conn=conn) if i == fid), None)
+        if fixed is None:
+            conn.close()
+            bot.answer_callback_query(call.id, "❌ Бул харажат бул айда жоқ!")
+            return
 
         c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
                   (f"{month}%",))
