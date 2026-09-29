@@ -2,6 +2,7 @@ from database import get_conn, get_credits_for_month, get_fixed_for_month
 from datetime import datetime
 from io import StringIO, BytesIO
 import csv
+import re
 import telebot
 from common import with_cancel
 from chart import generate_expense_pie_chart
@@ -20,7 +21,7 @@ def register_report_handlers(bot):
         now = datetime.now()
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton(
-            f"📅 {now.year} жылдық толық Excel есабы", callback_data=f"yearxlsx_{now.year}"
+            f"📅 {now.year} жыллық толық Excel есабы", callback_data=f"yearxlsx_{now.year}"
         ))
         for month_num in range(1, 13):
             year = now.year
@@ -36,8 +37,9 @@ def register_report_handlers(bot):
             ))
         bot.send_message(message.chat.id, "Есап дәўирин таңла:", reply_markup=markup)
 
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("rep_") and len(call.data) == 12)
+    @bot.callback_query_handler(func=lambda call: re.fullmatch(r"rep_\d{4}-\d{2}", call.data) is not None)
     def show_report(call):
+        bot.answer_callback_query(call.id)
         date_filter = call.data[4:]
         year = int(date_filter.split("-")[0])
         month_num = int(date_filter.split("-")[1])
@@ -75,7 +77,7 @@ def register_report_handlers(bot):
         family_budget = credit_total + fixed_total + other_total
         remaining = total_budget - paid_total - other_total
 
-        title = f"✏️ {MONTHS_RU[month_num]} {year} — жоспар" if is_future else f"📊 {MONTHS_RU[month_num]} {year} есабы"
+        title = f"✏️ {MONTHS_RU[month_num]} {year} — план" if is_future else f"📊 {MONTHS_RU[month_num]} {year} есабы"
         text = f"{title}\n\n"
 
         if income_by_source:
@@ -158,6 +160,10 @@ def register_report_handlers(bot):
                   (f"{date_filter}%",))
         other_by_cat = c.fetchall()
 
+        c.execute("SELECT source, COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s GROUP BY source",
+                  (f"{date_filter}%",))
+        income_rows = [(src, float(a)) for src, a in c.fetchall()]
+
         credits = get_credits_for_month(date_filter, conn=conn)
         fixed = get_fixed_for_month(date_filter, conn=conn)
         conn.close()
@@ -170,13 +176,13 @@ def register_report_handlers(bot):
         for cat, amount in other_by_cat:
             labeled.append((cat, float(amount)))
 
-        buf = generate_expense_pie_chart(date_filter, labeled)
+        buf = generate_expense_pie_chart(date_filter, labeled, income_rows)
         if buf is None:
-            bot.answer_callback_query(call.id, "Бул айда харажат жоқ — диаграмма салынбайды.")
+            bot.answer_callback_query(call.id, "Бул айда кирис те, харажат та жоқ — диаграмма салынбайды.")
             return
 
         bot.answer_callback_query(call.id, "📊 Таярланды!")
-        bot.send_photo(call.message.chat.id, buf, caption=f"📊 {date_filter} харажатлар бөлистириўи")
+        bot.send_photo(call.message.chat.id, buf, caption=f"📊 {date_filter} — харажат ҳәм кирис бөлистириўи")
 
     # ЖАҢА: толық жылдық Excel есабы (12 парақ + график)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("yearxlsx_"))
@@ -207,7 +213,7 @@ def register_report_handlers(bot):
 
         output = StringIO()
         writer = csv.writer(output)
-        writer.writerow(["Түри", "Аты/Дереги", "Сумма", "Сана/Күн"])
+        writer.writerow(["Түри", "Аты/Дереги", "Сумма", "Сане/Күн"])
 
         for source, amount, created_at in income_rows:
             writer.writerow(["Кирис", source, amount, created_at])
@@ -224,12 +230,19 @@ def register_report_handlers(bot):
         bot.answer_callback_query(call.id, "📄 Таярланды!")
         bot.send_document(call.message.chat.id, buf, caption=f"📄 {date_filter} есабы (CSV)")
 
+    def back_markup(date_filter):
+        m = telebot.types.InlineKeyboardMarkup()
+        m.add(telebot.types.InlineKeyboardButton(
+            f"🔙 {date_filter} есабына қайтыў", callback_data=f"rep_{date_filter}"))
+        return m
+
     # ✏️ Кредит өзгертиў (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fec_"))
     def future_edit_credit(call):
+        bot.answer_callback_query(call.id)
         parts = call.data.split("_")
         cid = int(parts[1])
-        date_filter = f"{parts[2]}-{parts[3]}"
+        date_filter = parts[2]
         msg = bot.send_message(call.message.chat.id, "Таза сумма жаз (сум):\nМысалы: 450000")
         bot.register_next_step_handler(msg, with_cancel(bot, fec_amount), cid, date_filter)
 
@@ -262,7 +275,7 @@ def register_report_handlers(bot):
                              f"✅ Тек <b>{date_filter}</b> айына тазаланды!\n"
                              f"• Сумма: <b>{amount:,.0f} сум</b>\n"
                              f"• Төлем күни: {day}-күн",
-                             parse_mode='HTML')
+                             parse_mode='HTML', reply_markup=back_markup(date_filter))
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
 
@@ -271,7 +284,7 @@ def register_report_handlers(bot):
     def future_del_credit(call):
         parts = call.data.split("_")
         cid = int(parts[1])
-        date_filter = f"{parts[2]}-{parts[3]}"
+        date_filter = parts[2]
         conn = get_conn()
         c = conn.cursor()
         c.execute("SELECT name FROM credits WHERE id=%s", (cid,))
@@ -289,14 +302,15 @@ def register_report_handlers(bot):
         bot.answer_callback_query(call.id, f"✅ {name} тек {date_filter} айынан оширилди!")
         bot.send_message(call.message.chat.id,
                          f"✅ <b>{name}</b> тек <b>{date_filter}</b> айынан оширилди!",
-                         parse_mode='HTML')
+                         parse_mode='HTML', reply_markup=back_markup(date_filter))
 
     # ✏️ Тұрақлы өзгертиў (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fef_"))
     def future_edit_fixed(call):
+        bot.answer_callback_query(call.id)
         parts = call.data.split("_")
         fid = int(parts[1])
-        date_filter = f"{parts[2]}-{parts[3]}"
+        date_filter = parts[2]
         msg = bot.send_message(call.message.chat.id, "Таза сумма жаз (сум):\nМысалы: 300000")
         bot.register_next_step_handler(msg, with_cancel(bot, fef_amount), fid, date_filter)
 
@@ -329,7 +343,7 @@ def register_report_handlers(bot):
                              f"✅ Тек <b>{date_filter}</b> айына тазаланды!\n"
                              f"• Сумма: <b>{amount:,.0f} сум</b>\n"
                              f"• Төлем күни: {day}-күн",
-                             parse_mode='HTML')
+                             parse_mode='HTML', reply_markup=back_markup(date_filter))
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
 
@@ -338,7 +352,7 @@ def register_report_handlers(bot):
     def future_del_fixed(call):
         parts = call.data.split("_")
         fid = int(parts[1])
-        date_filter = f"{parts[2]}-{parts[3]}"
+        date_filter = parts[2]
         conn = get_conn()
         c = conn.cursor()
         c.execute("SELECT name FROM fixed_expenses WHERE id=%s", (fid,))
@@ -356,11 +370,12 @@ def register_report_handlers(bot):
         bot.answer_callback_query(call.id, f"✅ {name} тек {date_filter} айынан оширилди!")
         bot.send_message(call.message.chat.id,
                          f"✅ <b>{name}</b> тек <b>{date_filter}</b> айынан оширилди!",
-                         parse_mode='HTML')
+                         parse_mode='HTML', reply_markup=back_markup(date_filter))
 
     # ➕ Таза кредит қосыў (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fac_"))
     def future_add_credit(call):
+        bot.answer_callback_query(call.id)
         date_filter = call.data[4:]
         msg = bot.send_message(call.message.chat.id, "Таза кредит атын жаз:\nМысалы: Kaspi кредит")
         bot.register_next_step_handler(msg, with_cancel(bot, fac_name), date_filter)
@@ -400,13 +415,14 @@ def register_report_handlers(bot):
                              f"✅ <b>{name}</b> тек <b>{date_filter}</b> айына қосылды!\n"
                              f"• Сумма: <b>{amount:,.0f} сум</b>\n"
                              f"• Төлем күни: {day}-күн",
-                             parse_mode='HTML')
+                             parse_mode='HTML', reply_markup=back_markup(date_filter))
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
 
     # ➕ Таза тұрақлы қосыў (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("faf_"))
     def future_add_fixed(call):
+        bot.answer_callback_query(call.id)
         date_filter = call.data[4:]
         msg = bot.send_message(call.message.chat.id, "Таза тұрақлы харажат атын жаз:\nМысалы: Интернет")
         bot.register_next_step_handler(msg, with_cancel(bot, faf_name), date_filter)
@@ -446,13 +462,14 @@ def register_report_handlers(bot):
                              f"✅ <b>{name}</b> тек <b>{date_filter}</b> айына қосылды!\n"
                              f"• Сумма: <b>{amount:,.0f} сум</b>\n"
                              f"• Төлем күни: {day}-күн",
-                             parse_mode='HTML')
+                             parse_mode='HTML', reply_markup=back_markup(date_filter))
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
 
     # ➕ Басқа харажат қосыў
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fao_"))
     def future_add_other(call):
+        bot.answer_callback_query(call.id)
         date_filter = call.data[4:]
         msg = bot.send_message(call.message.chat.id, "Харажат атын жаз:\nМысалы: Коммунал")
         bot.register_next_step_handler(msg, with_cancel(bot, fao_name), date_filter)
@@ -478,6 +495,7 @@ def register_report_handlers(bot):
             conn.close()
             bot.send_message(message.chat.id,
                              f"✅ {category}: <b>-{amount:,.0f} сум</b> қосылды!",
-                             parse_mode='HTML')
+                             parse_mode='HTML', reply_markup=back_markup(date_filter))
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
+
