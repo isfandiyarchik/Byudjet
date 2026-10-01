@@ -5,7 +5,7 @@
 1) Алдынғы айдан қалған «Қолда бар» автоматлық түрде кейинги айға өтеди.
 2) «Семьяда айланған бюджет» = ТЕК нағыз төленген кредит/тұрақлы харажатлар + басқа харажатлар.
    Төленбегенлери бюджетке кирмейди, «⏳ Төленбеген» бөлиминде бөлек көринеди.
-3) Келеси (план) айларда — барлық планласған сумма көрсетиледи.
+3) Келеси (план) айларда — барлық ойласылған сумма көрсетиледи.
 """
 from datetime import datetime
 from database import get_credits_for_month, get_fixed_for_month
@@ -33,7 +33,7 @@ def build_carry_map(conn, last_month, today=None):
     """
     {ай: сол айға кириўши қалдық}. Биринши мәлимет бар айдан баслап
     ҳәр айдың қалдығы кейинги айға өтип барады.
-    Өткен айлар — нағыз төленгени бойынша; усы ай (план ушын) —
+    Өткен айлар — нағыз төленгени бойынша; усы ай (усы ай ушын) —
     төленбеген төлемлер де алынады; келеси айлар — план бойынша.
     """
     current = _current_month(today)
@@ -117,8 +117,8 @@ def get_month_stats(month, conn, today=None, carry_map=None):
     paid_fixed_total = sum(a for _, a in paid_fixed)
     paid_total = paid_credit_total + paid_fixed_total
 
-    credit_total = sum(a for _, _, a, _ in credits)      # план
-    fixed_total = sum(a for _, _, a, _ in fixed)         # план
+    credit_total = sum(a for _, _, a, _ in credits)      # жоспар
+    fixed_total = sum(a for _, _, a, _ in fixed)         # жоспар
     pending_total = sum(a for _, _, a, _ in pending_credits) + sum(a for _, _, a, _ in pending_fixed)
 
     if carry_map is None:
@@ -154,7 +154,7 @@ def _pay_label(pay_day, month, today):
     y, mo = map(int, month.split("-"))
     name = MONTHS_KK[mo]
     if month == _current_month(today) and pay_day < today.day:
-        return f"⚠️ {pay_day}-{name}, мерзими өтти"
+        return f"⚠️ {pay_day}-{name}, уакыты өтти"
     return f"{pay_day}-{name}"
 
 
@@ -165,7 +165,7 @@ def format_month_text(stats, today=None, title=None):
 
     carry = stats["carry_in"]
 
-    # ---------------- План айы ----------------
+    # ---------------- Жоспар айы ----------------
     if stats["is_future"]:
         if carry != 0:
             text += f"↪️ Алдынғы айдан өтетуғын қалдық (план): <b>{carry:+,.0f} сум</b>\n\n"
@@ -188,12 +188,12 @@ def format_month_text(stats, today=None, title=None):
                 text += f"  • {cat}: <b>-{a:,.0f} сум</b>\n"
             text += f"  Итого: <b>-{stats['other_total']:,.0f} сум</b>\n"
         forecast = carry + stats["income_total"] - stats["planned_expense"]
-        text += f"\n💼 Планласған жәми харажат: <b>{stats['planned_expense']:,.0f} сум</b>\n"
+        text += f"\n💼 Ойласылған жәми харажат: <b>{stats['planned_expense']:,.0f} сум</b>\n"
         text += "\n──────────────────\n"
-        text += f"💰 Болжам қалдық: <b>{forecast:,.0f} сум</b>"
+        text += f"💰 План қалдық: <b>{forecast:,.0f} сум</b>"
         return text
 
-    # ---------------- Усы ай / өткен ай ----------------
+    # ---------------- Ағымдағы / өткен ай ----------------
     text += f"💼 Семьяда айланған бюджет: <b>{stats['circulating']:,.0f} сум</b>\n"
     text += "<i>(тек төленгени + басқа харажатлар)</i>\n\n"
 
@@ -235,4 +235,4 @@ def format_month_text(stats, today=None, title=None):
 
     text += "\n──────────────────\n"
     text += f"💰 Қолда бар: <b>{stats['available']:,.0f} сум</b>"
-    
+    return text
