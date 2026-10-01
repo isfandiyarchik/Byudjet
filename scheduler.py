@@ -4,6 +4,7 @@ from pytz import timezone
 from database import get_conn, get_credits_for_month, get_fixed_for_month
 from datetime import datetime, timedelta
 from backup import generate_backup
+from summary import get_month_stats, format_month_text
 
 UZ_TZ = timezone("Asia/Tashkent")
 
@@ -32,91 +33,17 @@ def daily_backup(bot, admin_ids):
 
 def morning_summary(bot):
     print(f"🌅 Азанда хабарлама жиберилди... {datetime.now(UZ_TZ)}")
+    today = datetime.now(UZ_TZ).replace(tzinfo=None)
+    month = today.strftime("%Y-%m")
+
     conn = get_conn()
     c = conn.cursor()
-
-    month = datetime.now(UZ_TZ).strftime("%Y-%m")
-
-    c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
-              (f"{month}%",))
-    total_income = float(c.fetchone()[0])
-
-    c.execute("SELECT COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s",
-              (f"{month}%",))
-    other = float(c.fetchone()[0])
-
-    c.execute("SELECT category, COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s GROUP BY category",
-              (f"{month}%",))
-    other_by_cat = c.fetchall()
-
-    c.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE month=%s AND status='paid'",
-              (month,))
-    paid_total = float(c.fetchone()[0])
-
-    c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='credit'",
-              (month,))
-    paid_credit_ids = [row[0] for row in c.fetchall()]
-
-    c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='fixed'",
-              (month,))
-    paid_fixed_ids = [row[0] for row in c.fetchall()]
-
+    stats = get_month_stats(month, conn, today)
     c.execute("SELECT telegram_id FROM users")
     users = c.fetchall()
     conn.close()
 
-    # Override ескеретін функциялар
-    credits = get_credits_for_month(month)
-    fixed = get_fixed_for_month(month)
-
-    credit_total = sum(float(a) for _, _, a, _ in credits)
-    fixed_total = sum(float(a) for _, _, a, _ in fixed)
-    family_budget = credit_total + fixed_total + other
-    remaining = total_income - paid_total - other
-
-    months_kk = {
-        1: "январь", 2: "февраль", 3: "март", 4: "апрель",
-        5: "май", 6: "июнь", 7: "июль", 8: "август",
-        9: "сентябрь", 10: "октябрь", 11: "ноябрь", 12: "декабрь"
-    }
-    today = datetime.now(UZ_TZ)
-
-    def get_payment_month(pay_day):
-        if pay_day >= today.day:
-            return months_kk[today.month]
-        else:
-            next_month = today.month + 1 if today.month < 12 else 1
-            return months_kk[next_month]
-
-    text = "🌅 <b>Қайырлы таң!</b>\n\n"
-    text += f"💼 Семьяда айланған бюджет: <b>{family_budget:,.0f} сум</b>\n\n"
-
-    text += "🔴 <b>Кредитлер:</b>\n"
-    for cid, name, amount, pay_day in credits:
-        amount = float(amount)
-        if cid in paid_credit_ids:
-            text += f"  • {name}: <b>{amount:,.0f} сум</b> ✅\n"
-        else:
-            text += f"  • {name}: <b>{amount:,.0f} сум</b> ({pay_day}-{get_payment_month(pay_day)})\n"
-    text += f"  Итого: <b>-{credit_total:,.0f} сум</b>\n"
-
-    text += "\n🟡 <b>Тұрақлы харажатлар:</b>\n"
-    for fid, name, amount, pay_day in fixed:
-        amount = float(amount)
-        if fid in paid_fixed_ids:
-            text += f"  • {name}: <b>{amount:,.0f} сум</b> ✅\n"
-        else:
-            text += f"  • {name}: <b>{amount:,.0f} сум</b> ({pay_day}-{get_payment_month(pay_day)})\n"
-    text += f"  Итого: <b>-{fixed_total:,.0f} сум</b>\n"
-
-    if other_by_cat:
-        text += "\n🟢 <b>Басқа харажатлар:</b>\n"
-        for cat, amt in other_by_cat:
-            text += f"  • {cat}: <b>{float(amt):,.0f} сум</b>\n"
-        text += f"  Итого: <b>-{other:,.0f} сум</b>\n"
-
-    text += f"\n──────────────────\n"
-    text += f"💰 Қолда бар: <b>{remaining:,.0f} сум</b>"
+    text = "🌅 <b>Қайырлы таң!</b>\n\n" + format_month_text(stats, today)
 
     for (telegram_id,) in users:
         try:
@@ -129,13 +56,17 @@ def check_credit_reminders(bot, admin_ids):
     print(f"🔍 Кредит тексерилип атыр... {datetime.now(UZ_TZ)}")
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT name, amount, pay_day FROM credits WHERE is_active=1")
-    credits = c.fetchall()
+    today = datetime.now(UZ_TZ)
+    remind_dt = today + timedelta(days=2)
+    remind_date = remind_dt.day
+    remind_month = remind_dt.strftime("%Y-%m")
+
+    credits = get_credits_for_month(remind_month, conn=conn)
+    c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='credit'", (remind_month,))
+    paid_ids = {row[0] for row in c.fetchall()}
     conn.close()
 
-    today = datetime.now(UZ_TZ)
-    remind_date = (today + timedelta(days=2)).day
-    reminders = [(n, a, p) for n, a, p in credits if p == remind_date]
+    reminders = [(n, a, p) for cid, n, a, p in credits if p == remind_date and cid not in paid_ids]
 
     print(f"📅 Бүгин: {today.day}, 2 күннен соң: {remind_date}")
     print(f"📋 Ескертиулер: {reminders}")
