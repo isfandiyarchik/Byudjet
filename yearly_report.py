@@ -2,7 +2,9 @@ import openpyxl
 from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Font, PatternFill, Alignment
 from io import BytesIO
-from database import get_conn, get_credits_for_month, get_fixed_for_month
+from datetime import datetime
+from database import get_conn
+from summary import get_month_stats, build_carry_map
 
 MONTHS_RU = {
     1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
@@ -36,59 +38,63 @@ def generate_yearly_report(year):
     """
     wb = openpyxl.Workbook()
     summary_ws = wb.active
-    summary_ws.title = "Жылдық қорытынды"
+    summary_ws.title = "Жыллық есабы"
 
     summary_ws.append(["Ай", "Кирис", "Кредитлер", "Тұрақлы харажатлар",
-                        "Басқа харажатлар", "Жалпы харажат", "Қалды"])
+                        "Басқа харажатлар", "Улыма харажат", "Қалды", "Алдынғы айдан қалдық"])
     _style_header_row(summary_ws)
 
     # ТҮЗЕТИЛДИ (тезлик): бурын ҳәр ай ушын 3 бөлек байланыс ашылатын еди (12 айға — 36 байланыс).
     # Енди бир ғана байланыс барлық 12 айға бирдей қолланылады.
     conn = get_conn()
+    today = datetime.now()
+    carry_map = build_carry_map(conn, f"{year}-12", today)
 
     for month_num in range(1, 13):
         date_filter = f"{year}-{month_num:02d}"
+        st = get_month_stats(date_filter, conn, today, carry_map=carry_map)
 
-        c = conn.cursor()
-        c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
-                  (f"{date_filter}%",))
-        income = float(c.fetchone()[0])
-
-        c.execute("SELECT category, COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s GROUP BY category",
-                  (f"{date_filter}%",))
-        other_by_cat = c.fetchall()
-
-        other_total = sum(float(a) for _, a in other_by_cat)
-
-        credits = get_credits_for_month(date_filter, conn=conn)
-        fixed = get_fixed_for_month(date_filter, conn=conn)
-        credit_total = sum(float(a) for _, _, a, _ in credits)
-        fixed_total = sum(float(a) for _, _, a, _ in fixed)
+        income = st["income_total"]
+        other_total = st["other_total"]
+        if st["is_future"]:
+            # жоспар айы: жоспарланған сумма
+            credit_total, fixed_total = st["credit_total"], st["fixed_total"]
+        else:
+            # өткен/ағымдағы ай: тек нағыз төленгени
+            credit_total, fixed_total = st["paid_credit_total"], st["paid_fixed_total"]
         total_expense = credit_total + fixed_total + other_total
-        remaining = income - total_expense
+        remaining = st["carry_in"] + income - total_expense
 
         month_name = MONTHS_RU[month_num]
         summary_ws.append([month_name, income, credit_total, fixed_total,
-                            other_total, total_expense, remaining])
+                           other_total, total_expense, remaining, st["carry_in"]])
 
         # ---- Per-month detail sheet ----
         ws = wb.create_sheet(title=month_name)
         ws.append(["Түри", "Аты/Категория", "Сумма"])
         _style_header_row(ws)
 
-        if credits:
-            for cid, name, amount, pay_day in credits:
-                ws.append(["Кредит", name, float(amount)])
-        if fixed:
-            for fid, name, amount, pay_day in fixed:
-                ws.append(["Тұрақлы харажат", name, float(amount)])
-        if other_by_cat:
-            for cat, amount in other_by_cat:
-                ws.append(["Басқа харажат", cat, float(amount)])
+        if st["is_future"]:
+            for _, name, amount, _ in st["credits"]:
+                ws.append(["Кредит (план)", name, float(amount)])
+            for _, name, amount, _ in st["fixed"]:
+                ws.append(["Тұрақлы харажат (план)", name, float(amount)])
+        else:
+            for name, amount in st["paid_credits"]:
+                ws.append(["Кредит (төленди)", name, float(amount)])
+            for name, amount in st["paid_fixed"]:
+                ws.append(["Тұрақлы харажат (төленди)", name, float(amount)])
+            for _, name, amount, _ in st["pending_credits"]:
+                ws.append(["Кредит (төленбеген)", name, float(amount)])
+            for _, name, amount, _ in st["pending_fixed"]:
+                ws.append(["Тұрақлы харажат (төленбеген)", name, float(amount)])
+        for cat, amount in st["other_by_cat"]:
+            ws.append(["Басқа харажат", cat, float(amount)])
 
         ws.append([])
+        ws.append(["Алдынғы айдан қалдық", "", st["carry_in"]])
         ws.append(["Кирис", "", income])
-        ws.append(["Жалпы харажат", "", total_expense])
+        ws.append(["Улыума харажат", "", total_expense])
         ws.append(["Қалды", "", remaining])
         _autosize_columns(ws)
 
