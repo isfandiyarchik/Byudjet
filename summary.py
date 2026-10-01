@@ -235,8 +235,4 @@ def format_month_text(stats, today=None, title=None):
 
     text += "\n──────────────────\n"
     text += f"💰 Қолда бар: <b>{stats['available']:,.0f} сум</b>"
-    if stats["pending_total"] > 0:
-        after = stats["available"] - stats["pending_total"]
-        warn = " ⚠️" if after < 0 else ""
-        text += f"\n📌 Барлық төлемлерден кейин: <b>{after:,.0f} сум</b>{warn}"
-    return text
+    
