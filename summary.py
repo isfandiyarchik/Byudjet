@@ -226,7 +226,7 @@ def format_month_text(stats, today=None, title=None):
         text += f"  Итого: <b>-{stats['other_total']:,.0f} сум</b>\n"
 
     if stats["pending_credits"] or stats["pending_fixed"]:
-        text += "\n⏳ <b>Төленбеген (бюджетке киргизилмейди):</b>\n"
+        text += "\n⏳ <b>Төленбеген (бюджетке кирмейди):</b>\n"
         for _, name, a, d in stats["pending_credits"]:
             text += f"  • 🔴 {name}: {a:,.0f} сум ({_pay_label(d, month, today)})\n"
         for _, name, a, d in stats["pending_fixed"]:
