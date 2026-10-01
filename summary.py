@@ -33,7 +33,7 @@ def build_carry_map(conn, last_month, today=None):
     """
     {ай: сол айға кириўши қалдық}. Биринши мәлимет бар айдан баслап
     ҳәр айдың қалдығы кейинги айға өтип барады.
-    Өткен айлар — нағыз төленгени бойынша; усы ай (усы ай ушын) —
+    Өткен айлар — нағыз төленгени бойынша; усы ай (план ушын) —
     төленбеген төлемлер де алынады; келеси айлар — план бойынша.
     """
     current = _current_month(today)
@@ -173,37 +173,34 @@ def format_month_text(stats, today=None, title=None):
             text += "📥 <b>Кирис:</b>\n"
             for s, a in stats["income_by_source"]:
                 text += f"  • {s}: <b>+{a:,.0f} сум</b>\n"
-            text += f"  Итого: <b>+{stats['income_total']:,.0f} сум</b>\n\n"
+            text += f"  <b>Итого: +{stats['income_total']:,.0f} сум</b>\n\n"
         text += "🔴 <b>Кредитлер:</b>\n"
         for _, name, amount, _ in stats["credits"]:
             text += f"  • {name}: <b>{amount:,.0f} сум</b>\n"
-        text += f"  Итого: <b>-{stats['credit_total']:,.0f} сум</b>\n"
+        text += f"  <b>Итого: -{stats['credit_total']:,.0f} сум</b>\n"
         text += "\n🟡 <b>Тұрақлы харажатлар:</b>\n"
         for _, name, amount, _ in stats["fixed"]:
             text += f"  • {name}: <b>{amount:,.0f} сум</b>\n"
-        text += f"  Итого: <b>-{stats['fixed_total']:,.0f} сум</b>\n"
+        text += f"  <b>Итого: -{stats['fixed_total']:,.0f} сум</b>\n"
         if stats["other_by_cat"]:
             text += "\n🟢 <b>Басқа харажатлар:</b>\n"
             for cat, a in stats["other_by_cat"]:
                 text += f"  • {cat}: <b>-{a:,.0f} сум</b>\n"
-            text += f"  Итого: <b>-{stats['other_total']:,.0f} сум</b>\n"
+            text += f"  <b>Итого: -{stats['other_total']:,.0f} сум</b>\n"
         forecast = carry + stats["income_total"] - stats["planned_expense"]
         text += f"\n💼 Ойласылған жәми харажат: <b>{stats['planned_expense']:,.0f} сум</b>\n"
         text += "\n──────────────────\n"
-        text += f"💰 План қалдық: <b>{forecast:,.0f} сум</b>"
+        text += f"💰 <b>Болжам қалдық: {forecast:,.0f} сум</b>"
         return text
 
     # ---------------- Ағымдағы / өткен ай ----------------
-    text += f"💼 Семьяда айланған бюджет: <b>{stats['circulating']:,.0f} сум</b>\n"
-    text += "<i>(тек төленгени + басқа харажатлар)</i>\n\n"
-
     if carry != 0:
         text += f"↪️ Алдынғы айдан өткен қалдық: <b>{carry:+,.0f} сум</b>\n"
     if stats["income_by_source"]:
         text += "📥 <b>Кирис:</b>\n"
         for s, a in stats["income_by_source"]:
             text += f"  • {s}: <b>+{a:,.0f} сум</b>\n"
-        text += f"  Итого: <b>+{stats['income_total']:,.0f} сум</b>\n"
+        text += f"  <b>Итого: +{stats['income_total']:,.0f} сум</b>\n"
     if carry != 0 or stats["income_by_source"]:
         text += "\n"
 
@@ -211,28 +208,30 @@ def format_month_text(stats, today=None, title=None):
         text += "🔴 <b>Кредитлер (төленди):</b>\n"
         for name, a in stats["paid_credits"]:
             text += f"  • {name}: <b>{a:,.0f} сум</b> ✅\n"
-        text += f"  Итого: <b>-{stats['paid_credit_total']:,.0f} сум</b>\n"
+        text += f"  <b>Итого: -{stats['paid_credit_total']:,.0f} сум</b>\n"
 
     if stats["paid_fixed"]:
         text += "\n🟡 <b>Тұрақлы харажатлар (төленди):</b>\n"
         for name, a in stats["paid_fixed"]:
             text += f"  • {name}: <b>{a:,.0f} сум</b> ✅\n"
-        text += f"  Итого: <b>-{stats['paid_fixed_total']:,.0f} сум</b>\n"
+        text += f"  <b>Итого: -{stats['paid_fixed_total']:,.0f} сум</b>\n"
 
     if stats["other_by_cat"]:
         text += "\n🟢 <b>Басқа харажатлар:</b>\n"
         for cat, a in stats["other_by_cat"]:
             text += f"  • {cat}: <b>{a:,.0f} сум</b>\n"
-        text += f"  Итого: <b>-{stats['other_total']:,.0f} сум</b>\n"
+        text += f"  <b>Итого: -{stats['other_total']:,.0f} сум</b>\n"
 
     if stats["pending_credits"] or stats["pending_fixed"]:
         text += "\n⏳ <b>Төленбеген (бюджетке кирмейди):</b>\n"
         for _, name, a, d in stats["pending_credits"]:
-            text += f"  • 🔴 {name}: {a:,.0f} сум ({_pay_label(d, month, today)})\n"
+            text += f"  • 🔴 {name}: <b>{a:,.0f} сум</b> ({_pay_label(d, month, today)})\n"
         for _, name, a, d in stats["pending_fixed"]:
-            text += f"  • 🟡 {name}: {a:,.0f} сум ({_pay_label(d, month, today)})\n"
-        text += f"  Төлеўге керек: <b>{stats['pending_total']:,.0f} сум</b>\n"
+            text += f"  • 🟡 {name}: <b>{a:,.0f} сум</b> ({_pay_label(d, month, today)})\n"
+        text += f"  <b>Төлеўге керек: {stats['pending_total']:,.0f} сум</b>\n"
 
     text += "\n──────────────────\n"
-    text += f"💰 Қолда бар: <b>{stats['available']:,.0f} сум</b>"
+    text += f"💰 <b>Қолда бар: {stats['available']:,.0f} сум</b>\n"
+    text += f"💼 <b>Айланған бюджет: {stats['circulating']:,.0f} сум</b>\n"
+    text += "<i>(тек төленгени + басқа харажатлар)</i>"
     return text
