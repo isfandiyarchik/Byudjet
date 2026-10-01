@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 from database import init_db, get_conn, get_credits_for_month, get_fixed_for_month, freeze_past_months
 from scheduler import start_scheduler
+from summary import get_month_stats, format_month_text
 from backup import generate_backup
 from common import ADMIN_IDS, is_admin, with_cancel
 from handlers.budget import register_budget_handlers
@@ -70,86 +71,13 @@ def manual_backup(message):
 
 @bot.message_handler(func=lambda m: m.text == "🏠 Баслапқы бет")
 def dashboard(message):
-    # "жазып атыр..." индикаторы дереу көринеди — сораўлар таярланып атырғанда экран бос болмайды
     bot.send_chat_action(message.chat.id, 'typing')
-
-    conn = get_conn()
-    c = conn.cursor()
-
-    month = datetime.now().strftime("%Y-%m")
-
-    c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
-              (f"{month}%",))
-    total_income = float(c.fetchone()[0])
-
-    # ТҮЗЕТИЛДИ (тезлик): "other" жәми сумма ушын бөлек сораў керек емес,
-    # category-бойынша тизимнен Python-да есапланады (1 сораў үнемленди)
-    c.execute("SELECT category, COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s GROUP BY category",
-              (f"{month}%",))
-    other_by_cat = c.fetchall()
-    other = sum(float(a) for _, a in other_by_cat)
-
-    # ТҮЗЕТИЛДИ (тезлик): бурын 3 бөлек сораў (paid_total, paid_credit_ids, paid_fixed_ids)
-    # ислейтин еди, енди барлығы бир ғана сораўдан алынады (2 сораў үнемленди)
-    c.execute("SELECT type, ref_id, amount FROM payments WHERE month=%s AND status='paid'",
-              (month,))
-    payment_rows = c.fetchall()
-    paid_total = sum(float(a) for _, _, a in payment_rows)
-    paid_credit_ids = [ref_id for ptype, ref_id, _ in payment_rows if ptype == 'credit']
-    paid_fixed_ids = [ref_id for ptype, ref_id, _ in payment_rows if ptype == 'fixed']
-
-    credits = get_credits_for_month(month, conn=conn)
-    fixed = get_fixed_for_month(month, conn=conn)
-    conn.close()
-
-    credit_total = sum(float(a) for _, _, a, _ in credits)
-    fixed_total = sum(float(a) for _, _, a, _ in fixed)
-    family_budget = credit_total + fixed_total + other
-    remaining = total_income - paid_total - other
-
-    months_kk = {
-        1: "январь", 2: "февраль", 3: "март", 4: "апрель",
-        5: "май", 6: "июнь", 7: "июль", 8: "август",
-        9: "сентябрь", 10: "октябрь", 11: "ноябрь", 12: "декабрь"
-    }
     today = datetime.now()
-
-    def get_payment_month(pay_day):
-        if pay_day >= today.day:
-            return months_kk[today.month]
-        else:
-            next_month = today.month + 1 if today.month < 12 else 1
-            return months_kk[next_month]
-
-    text = f"💼 Семьяда айланған бюджет: <b>{family_budget:,.0f} сум</b>\n\n"
-
-    text += "🔴 <b>Кредитлер:</b>\n"
-    for cid, name, amount, pay_day in credits:
-        amount = float(amount)
-        if cid in paid_credit_ids:
-            text += f"  • {name}: <b>{amount:,.0f} сум</b> ✅\n"
-        else:
-            text += f"  • {name}: <b>{amount:,.0f} сум</b> ({pay_day}-{get_payment_month(pay_day)})\n"
-    text += f"  Итого: <b>-{credit_total:,.0f} сум</b>\n"
-
-    text += "\n🟡 <b>Тұрақлы харажатлар:</b>\n"
-    for fid, name, amount, pay_day in fixed:
-        amount = float(amount)
-        if fid in paid_fixed_ids:
-            text += f"  • {name}: <b>{amount:,.0f} сум</b> ✅\n"
-        else:
-            text += f"  • {name}: <b>{amount:,.0f} сум</b> ({pay_day}-{get_payment_month(pay_day)})\n"
-    text += f"  Итого: <b>-{fixed_total:,.0f} сум</b>\n"
-
-    if other_by_cat:
-        text += "\n🟢 <b>Басқа харажатлар:</b>\n"
-        for cat, amt in other_by_cat:
-            text += f"  • {cat}: <b>{float(amt):,.0f} сум</b>\n"
-        text += f"  Итого: <b>-{other:,.0f} сум</b>\n"
-
-    text += f"\n──────────────────\n"
-    text += f"💰 Қолда бар: <b>{remaining:,.0f} сум</b>"
-
+    month = today.strftime("%Y-%m")
+    conn = get_conn()
+    stats = get_month_stats(month, conn, today)
+    conn.close()
+    text = format_month_text(stats, today)
     bot.send_message(message.chat.id, text, reply_markup=main_menu(), parse_mode='HTML')
 
 @bot.message_handler(func=lambda m: m.text == "⚙️ Өзгертиў")
