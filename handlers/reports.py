@@ -6,6 +6,7 @@ import re
 import telebot
 from common import with_cancel
 from chart import generate_expense_pie_chart
+from summary import get_month_stats, format_month_text
 from yearly_report import generate_yearly_report
 
 MONTHS_RU = {
@@ -43,69 +44,18 @@ def register_report_handlers(bot):
         date_filter = call.data[4:]
         year = int(date_filter.split("-")[0])
         month_num = int(date_filter.split("-")[1])
-        now = datetime.now()
-        is_future = (year > now.year) or (year == now.year and month_num > now.month)
 
+        today = datetime.now()
         conn = get_conn()
-        c = conn.cursor()
-
-        c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
-                  (f"{date_filter}%",))
-        total_budget = float(c.fetchone()[0])
-
-        c.execute("SELECT source, COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s GROUP BY source",
-                  (f"{date_filter}%",))
-        income_by_source = c.fetchall()
-
-        c.execute("SELECT category, COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s GROUP BY category",
-                  (f"{date_filter}%",))
-        other_by_cat = c.fetchall()
-        other_total = sum(float(a) for _, a in other_by_cat)
-
-        c.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE month=%s AND status='paid'",
-                  (date_filter,))
-        paid_total = float(c.fetchone()[0])
-
-        # ТҮЗЕТИЛДИ (тезлик): сол ашық турған байланыстың өзи қайта пайдаланылады
-        credits = get_credits_for_month(date_filter, conn=conn)
-        fixed = get_fixed_for_month(date_filter, conn=conn)
+        stats = get_month_stats(date_filter, conn, today)
         conn.close()
+        is_future = stats["is_future"]
+        credits = stats["credits"]
+        fixed = stats["fixed"]
 
-        credit_total = sum(float(a) for _, _, a, _ in credits)
-        fixed_total = sum(float(a) for _, _, a, _ in fixed)
-
-        family_budget = credit_total + fixed_total + other_total
-        remaining = total_budget - paid_total - other_total
-
-        title = f"✏️ {MONTHS_RU[month_num]} {year} — план" if is_future else f"📊 {MONTHS_RU[month_num]} {year} есабы"
-        text = f"{title}\n\n"
-
-        if income_by_source:
-            text += "📥 <b>Кириc:</b>\n"
-            for source, amount in income_by_source:
-                text += f"  • {source}: <b>+{float(amount):,.0f} сум</b>\n"
-            text += f"  Итого: <b>+{total_budget:,.0f} сум</b>\n\n"
-
-        text += "🔴 <b>Кредитлер:</b>\n"
-        for cid, name, amount, pay_day in credits:
-            text += f"  • {name}: <b>{float(amount):,.0f} сум</b>\n"
-        text += f"  Итого: <b>-{credit_total:,.0f} сум</b>\n"
-
-        text += "\n🟡 <b>Тұрақлы харажатлар:</b>\n"
-        for fid, name, amount, pay_day in fixed:
-            text += f"  • {name}: <b>{float(amount):,.0f} сум</b>\n"
-        text += f"  Итого: <b>-{fixed_total:,.0f} сум</b>\n"
-
-        if other_by_cat:
-            text += "\n🟢 <b>Басқа харажатлар:</b>\n"
-            for cat, amt in other_by_cat:
-                text += f"  • {cat}: <b>-{float(amt):,.0f} сум</b>\n"
-            text += f"  Итого: <b>-{other_total:,.0f} сум</b>\n"
-
-        text += f"\n💼 Семьяда айланған бюджет: <b>{family_budget:,.0f} сум</b>\n"
-        text += f"✅ Төленген: <b>-{paid_total:,.0f} сум</b>\n"
-        text += f"\n──────────────────\n"
-        text += f"💰 Қолда бар: <b>{remaining:,.0f} сум</b>"
+        title = (f"✏️ {MONTHS_RU[month_num]} {year} — план" if is_future
+                 else f"📊 {MONTHS_RU[month_num]} {year} есабы")
+        text = format_month_text(stats, today, title=title)
 
         markup = telebot.types.InlineKeyboardMarkup()
 
@@ -149,32 +99,32 @@ def register_report_handlers(bot):
 
         bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode='HTML')
 
-    # ЖАҢА: айлық харажат диаграммасы (pie chart)
+    # Айлық диаграмма: харажат + кирис
     @bot.callback_query_handler(func=lambda call: call.data.startswith("chartrep_"))
     def show_chart(call):
         date_filter = call.data[9:]
-
         conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT category, COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s GROUP BY category",
-                  (f"{date_filter}%",))
-        other_by_cat = c.fetchall()
-
-        c.execute("SELECT source, COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s GROUP BY source",
-                  (f"{date_filter}%",))
-        income_rows = [(src, float(a)) for src, a in c.fetchall()]
-
-        credits = get_credits_for_month(date_filter, conn=conn)
-        fixed = get_fixed_for_month(date_filter, conn=conn)
+        stats = get_month_stats(date_filter, conn, datetime.now())
         conn.close()
 
         labeled = []
-        for cid, name, amount, pay_day in credits:
-            labeled.append((f"🔴 {name}", float(amount)))
-        for fid, name, amount, pay_day in fixed:
-            labeled.append((f"🟡 {name}", float(amount)))
-        for cat, amount in other_by_cat:
+        if stats["is_future"]:
+            for _, name, amount, _ in stats["credits"]:
+                labeled.append((f"{name}", float(amount)))
+            for _, name, amount, _ in stats["fixed"]:
+                labeled.append((f"{name}", float(amount)))
+        else:
+            # Өткен/ағымдағы айда тек нағыз төленгени диаграммаға киреди
+            for name, amount in stats["paid_credits"]:
+                labeled.append((name, float(amount)))
+            for name, amount in stats["paid_fixed"]:
+                labeled.append((name, float(amount)))
+        for cat, amount in stats["other_by_cat"]:
             labeled.append((cat, float(amount)))
+
+        income_rows = list(stats["income_by_source"])
+        if stats["carry_in"] > 0:
+            income_rows.append(("Алдынғы айдан қалдық", float(stats["carry_in"])))
 
         buf = generate_expense_pie_chart(date_filter, labeled, income_rows)
         if buf is None:
@@ -193,48 +143,49 @@ def register_report_handlers(bot):
         bot.send_document(call.message.chat.id, buf,
                           caption=f"📅 {year} жылдың толық есабы (ҳәр ай — бөлек парақ, график пенен)")
 
-    # ЖАҢА: CSV экспорт
+    # CSV экспорт
     @bot.callback_query_handler(func=lambda call: call.data.startswith("csvrep_"))
     def export_csv(call):
         date_filter = call.data[7:]
-
         conn = get_conn()
         c = conn.cursor()
-        c.execute("SELECT source, amount, created_at FROM budget WHERE created_at LIKE %s",
-                  (f"{date_filter}%",))
+        c.execute("SELECT source, amount, created_at FROM budget WHERE created_at LIKE %s", (f"{date_filter}%",))
         income_rows = c.fetchall()
-        c.execute("SELECT category, amount, created_at FROM other_expenses WHERE created_at LIKE %s",
-                  (f"{date_filter}%",))
+        c.execute("SELECT category, amount, created_at FROM other_expenses WHERE created_at LIKE %s", (f"{date_filter}%",))
         other_rows = c.fetchall()
-
-        credits = get_credits_for_month(date_filter, conn=conn)
-        fixed = get_fixed_for_month(date_filter, conn=conn)
+        stats = get_month_stats(date_filter, conn, datetime.now())
         conn.close()
 
         output = StringIO()
         writer = csv.writer(output)
-        writer.writerow(["Түри", "Аты/Дереги", "Сумма", "Сане/Күн"])
+        writer.writerow(["Түри", "Аты/Дереги", "Сумма", "Сана/Күн"])
 
+        if stats["carry_in"] != 0:
+            writer.writerow(["Алдынғы айдан қалдық", "", stats["carry_in"], ""])
         for source, amount, created_at in income_rows:
             writer.writerow(["Кирис", source, amount, created_at])
-        for cid, name, amount, pay_day in credits:
-            writer.writerow(["Кредит", name, amount, f"{pay_day}-күн"])
-        for fid, name, amount, pay_day in fixed:
-            writer.writerow(["Тұрақлы харажат", name, amount, f"{pay_day}-күн"])
+        if stats["is_future"]:
+            for cid, name, amount, pay_day in stats["credits"]:
+                writer.writerow(["Кредит (план)", name, amount, f"{pay_day}-күн"])
+            for fid, name, amount, pay_day in stats["fixed"]:
+                writer.writerow(["Тұрақлы харажат (план)", name, amount, f"{pay_day}-күн"])
+        else:
+            for name, amount in stats["paid_credits"]:
+                writer.writerow(["Кредит (төленди)", name, amount, ""])
+            for name, amount in stats["paid_fixed"]:
+                writer.writerow(["Тұрақлы харажат (төленди)", name, amount, ""])
+            for cid, name, amount, pay_day in stats["pending_credits"]:
+                writer.writerow(["Кредит (төленбеген)", name, amount, f"{pay_day}-күн"])
+            for fid, name, amount, pay_day in stats["pending_fixed"]:
+                writer.writerow(["Тұрақлы харажат (төленбеген)", name, amount, f"{pay_day}-күн"])
         for cat, amount, created_at in other_rows:
             writer.writerow(["Басқа харажат", cat, amount, created_at])
+        writer.writerow(["Қолда бар", "", stats["available"], ""])
 
         buf = BytesIO(output.getvalue().encode("utf-8-sig"))
         buf.name = f"esap_{date_filter}.csv"
-
         bot.answer_callback_query(call.id, "📄 Таярланды!")
         bot.send_document(call.message.chat.id, buf, caption=f"📄 {date_filter} есабы (CSV)")
-
-    def back_markup(date_filter):
-        m = telebot.types.InlineKeyboardMarkup()
-        m.add(telebot.types.InlineKeyboardButton(
-            f"🔙 {date_filter} есабына қайтыў", callback_data=f"rep_{date_filter}"))
-        return m
 
     # ✏️ Кредит өзгертиў (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fec_"))
@@ -498,4 +449,3 @@ def register_report_handlers(bot):
                              parse_mode='HTML', reply_markup=back_markup(date_filter))
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың.")
-
