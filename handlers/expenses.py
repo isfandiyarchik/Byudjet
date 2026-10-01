@@ -1,4 +1,5 @@
 from database import get_conn, get_category_limit, get_credits_for_month, get_fixed_for_month
+from summary import get_available
 from datetime import datetime
 import telebot
 from common import is_admin, with_cancel
@@ -207,22 +208,13 @@ def register_expense_handlers(bot):
             bot.answer_callback_query(call.id, "❌ Бул кредит бул айда жоқ!")
             return
 
-        c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
-                  (f"{month}%",))
-        month_budget = c.fetchone()[0]
-
-        c.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE month=%s AND status='paid'",
-                  (month,))
-        paid_total = c.fetchone()[0]
-
-        c.execute("SELECT COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s",
-                  (f"{month}%",))
-        other = c.fetchone()[0]
+        # өткен айдан қалған қалдық та есапқа алынады
+        available = get_available(month, conn)
 
         conn.close()
 
         name, amount = credit
-        remaining = month_budget - paid_total - other
+        remaining = available
 
         if remaining >= amount:
             conn = get_conn()
@@ -270,22 +262,13 @@ def register_expense_handlers(bot):
             bot.answer_callback_query(call.id, "❌ Бул харажат бул айда жоқ!")
             return
 
-        c.execute("SELECT COALESCE(SUM(amount),0) FROM budget WHERE created_at LIKE %s",
-                  (f"{month}%",))
-        month_budget = c.fetchone()[0]
-
-        c.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE month=%s AND status='paid'",
-                  (month,))
-        paid_total = c.fetchone()[0]
-
-        c.execute("SELECT COALESCE(SUM(amount),0) FROM other_expenses WHERE created_at LIKE %s",
-                  (f"{month}%",))
-        other = c.fetchone()[0]
+        # өткен айдан қалған қалдық та есапқа алынады
+        available = get_available(month, conn)
 
         conn.close()
 
         name, amount = fixed
-        remaining = month_budget - paid_total - other
+        remaining = available
 
         if remaining >= amount:
             conn = get_conn()
