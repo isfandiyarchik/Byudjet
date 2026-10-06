@@ -228,7 +228,7 @@ def format_month_text(stats, today=None, title=None):
             text += f"  • 🔴 {name}: <b>{a:,.0f} сум</b> ({_pay_label(d, month, today)})\n"
         for _, name, a, d in stats["pending_fixed"]:
             text += f"  • 🟡 {name}: <b>{a:,.0f} сум</b> ({_pay_label(d, month, today)})\n"
-        text += f"  <b>Төлеўге керек: {stats['pending_total']:,.0f} сум</b>\n"
+        text += f"  <b>Төлениў керек: {stats['pending_total']:,.0f} сум</b>\n"
 
     text += "\n──────────────────\n"
     text += f"💰 <b>Қолда бар: {stats['available']:,.0f} сум</b>\n"
