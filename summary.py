@@ -31,7 +31,7 @@ def _current_month(today=None):
 
 def build_carry_map(conn, last_month, today=None):
     """
-    {ай: сол айға кириўши қалдық}. Биринши мәлимет бар айдан баслап
+    {ай: сол айға кириўши қалдық}. Биринши мағлыумат бар айдан баслап
     ҳәр айдың қалдығы кейинги айға өтип барады.
     Өткен айлар — нағыз төленгени бойынша; усы ай (план ушын) —
     төленбеген төлемлер де алынады; келеси айлар — план бойынша.
@@ -117,8 +117,8 @@ def get_month_stats(month, conn, today=None, carry_map=None):
     paid_fixed_total = sum(a for _, a in paid_fixed)
     paid_total = paid_credit_total + paid_fixed_total
 
-    credit_total = sum(a for _, _, a, _ in credits)      # жоспар
-    fixed_total = sum(a for _, _, a, _ in fixed)         # жоспар
+    credit_total = sum(a for _, _, a, _ in credits)      # план
+    fixed_total = sum(a for _, _, a, _ in fixed)         # план
     pending_total = sum(a for _, _, a, _ in pending_credits) + sum(a for _, _, a, _ in pending_fixed)
 
     if carry_map is None:
@@ -154,7 +154,7 @@ def _pay_label(pay_day, month, today):
     y, mo = map(int, month.split("-"))
     name = MONTHS_KK[mo]
     if month == _current_month(today) and pay_day < today.day:
-        return f"⚠️ {pay_day}-{name}, уакыты өтти"
+        return f"⚠️ {pay_day}-{name}, мерзими өтти"
     return f"{pay_day}-{name}"
 
 
@@ -165,15 +165,15 @@ def format_month_text(stats, today=None, title=None):
 
     carry = stats["carry_in"]
 
-    # ---------------- Жоспар айы ----------------
+    # ---------------- План айы ----------------
     if stats["is_future"]:
-        if carry != 0:
-            text += f"↪️ Алдынғы айдан өтетуғын қалдық (план): <b>{carry:+,.0f} сум</b>\n\n"
-        if stats["income_by_source"]:
+        if carry != 0 or stats["income_by_source"]:
             text += "📥 <b>Кирис:</b>\n"
+            if carry != 0:
+                text += f"  • ↪️ Өтетуғын қалдық (план): <b>{carry:+,.0f} сум</b>\n"
             for s, a in stats["income_by_source"]:
                 text += f"  • {s}: <b>+{a:,.0f} сум</b>\n"
-            text += f"  <b>Итого: +{stats['income_total']:,.0f} сум</b>\n\n"
+            text += f"  <b>Итого: {carry + stats['income_total']:+,.0f} сум</b>\n\n"
         text += "🔴 <b>Кредитлер:</b>\n"
         for _, name, amount, _ in stats["credits"]:
             text += f"  • {name}: <b>{amount:,.0f} сум</b>\n"
@@ -194,15 +194,13 @@ def format_month_text(stats, today=None, title=None):
         return text
 
     # ---------------- Ағымдағы / өткен ай ----------------
-    if carry != 0:
-        text += f"↪️ Алдынғы айдан өткен қалдық: <b>{carry:+,.0f} сум</b>\n"
-    if stats["income_by_source"]:
+    if carry != 0 or stats["income_by_source"]:
         text += "📥 <b>Кирис:</b>\n"
+        if carry != 0:
+            text += f"  • ↪️ Алдынғы айдан өткен қалдық: <b>{carry:+,.0f} сум</b>\n"
         for s, a in stats["income_by_source"]:
             text += f"  • {s}: <b>+{a:,.0f} сум</b>\n"
-        text += f"  <b>Итого: +{stats['income_total']:,.0f} сум</b>\n"
-    if carry != 0 or stats["income_by_source"]:
-        text += "\n"
+        text += f"  <b>Итого: {carry + stats['income_total']:+,.0f} сум</b>\n\n"
 
     if stats["paid_credits"]:
         text += "🔴 <b>Кредитлер (төленди):</b>\n"
@@ -223,7 +221,7 @@ def format_month_text(stats, today=None, title=None):
         text += f"  <b>Итого: -{stats['other_total']:,.0f} сум</b>\n"
 
     if stats["pending_credits"] or stats["pending_fixed"]:
-        text += "\n⏳ <b>Төленбеген (бюджетке кирмейди):</b>\n"
+        text += "\n⏳ <b>Төленбеген (бюджетке киргизилмейди):</b>\n"
         for _, name, a, d in stats["pending_credits"]:
             text += f"  • 🔴 {name}: <b>{a:,.0f} сум</b> ({_pay_label(d, month, today)})\n"
         for _, name, a, d in stats["pending_fixed"]:
