@@ -109,15 +109,29 @@ def register_expense_handlers(bot):
     def save_other_expense(message, category, telegram_id):
         try:
             amount = float(message.text.replace(",", "").replace(" ", ""))
+            month = datetime.now().strftime("%Y-%m")
             conn = get_conn()
             c = conn.cursor()
+
+            # Қалдық жетпесе — харажат жазылмайды, ескертиў шығады
+            available = get_available(month, conn)
+            if amount > available:
+                conn.close()
+                bot.send_message(message.chat.id,
+                                 f"⚠️ <b>Бюджет жетиспейди!</b>\n"
+                                 f"• {category}: <b>{amount:,.0f} сум</b> керек\n"
+                                 f"• Қолда бар: <b>{available:,.0f} сум</b>\n"
+                                 f"• Айырма: <b>-{amount - available:,.0f} сум</b>\n\n"
+                                 f"Алдын бюджетти толтырың!",
+                                 parse_mode='HTML')
+                return
+
             c.execute(
                 "INSERT INTO other_expenses (telegram_id, category, amount, created_at) VALUES (%s,%s,%s,%s)",
                 (telegram_id, category, amount, str(datetime.now())))
             conn.commit()
 
-            # ЖАҢА: категория лимитин тексериў
-            month = datetime.now().strftime("%Y-%m")
+            # Категория лимитин тексериў
             c.execute("SELECT COALESCE(SUM(amount),0) FROM other_expenses WHERE category=%s AND created_at LIKE %s",
                       (category, f"{month}%"))
             category_month_total = float(c.fetchone()[0])
