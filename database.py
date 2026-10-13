@@ -1,5 +1,6 @@
 import psycopg2
 import os
+from common import uz_now
 
 def get_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"))
@@ -8,7 +9,8 @@ def _items_for_month(base_table, ov_table, fk, month, conn=None):
     """
     Кредит ҳәм тұрақлы харажат ушын ортақ логика.
     - Сол айға жазылған override бар болса — сол қолланылады.
-    - Override жоқ болса — тек is_active=1 болған тийкарғы жазба алынады.
+    - Override жоқ болса — тек is_active=1 болған тийкарғы жазба алынады
+      (start_month бар болса, сол айдан баслап ғана).
     - Тек бир айға қосылған жазба (base is_active=0 + сол айда active override)
       сол айда көринеди, басқа айларда көринбейди.
     """
@@ -16,20 +18,23 @@ def _items_for_month(base_table, ov_table, fk, month, conn=None):
     if own_conn:
         conn = get_conn()
     c = conn.cursor()
-    c.execute(f"SELECT id, name, amount, pay_day, is_active FROM {base_table} ORDER BY id")
+    c.execute(f"SELECT id, name, amount, pay_day, is_active, start_month FROM {base_table} ORDER BY id")
     base = c.fetchall()
 
     c.execute(f"SELECT {fk}, amount, pay_day, is_active FROM {ov_table} WHERE month=%s", (month,))
     overrides = {row[0]: (row[1], row[2], row[3]) for row in c.fetchall()}
 
     result = []
-    for iid, name, amount, pay_day, is_active in base:
+    for iid, name, amount, pay_day, is_active, start_month in base:
         if iid in overrides:
             o_amount, o_pay_day, o_active = overrides[iid]
             if o_active == 0:
                 continue
             result.append((iid, name, float(o_amount), o_pay_day))
         elif is_active == 1:
+            # start_month: таза қосылған кредит өткен айларда көринбейди
+            if start_month and month < start_month:
+                continue
             result.append((iid, name, float(amount), pay_day))
 
     if own_conn:
@@ -52,8 +57,7 @@ def freeze_past_months(kind, item_id, conn):
     kind: 'credit' | 'fixed'. conn: ашық байланыс (commit-ти шақырыўшы өзи етеди).
     Бул функция өзгертиўден АЛДЫН шақырылыўы керек.
     """
-    from datetime import datetime
-    current = datetime.now().strftime("%Y-%m")
+    current = uz_now().strftime("%Y-%m")
     if kind == "credit":
         base_table, ov_table, fk = "credits", "credit_overrides", "credit_id"
     else:
@@ -193,11 +197,15 @@ def init_db():
         is_active INTEGER DEFAULT 1
     )''')
 
-    # ЖАҢА: категория бойынша ай сайынғы лимит
+    # ТАЗА: категория бойынша ай сайынғы лимит
     c.execute('''CREATE TABLE IF NOT EXISTS category_limits (
         category TEXT PRIMARY KEY,
         limit_amount REAL
     )''')
+
+    # Таза қосылған кредит/харажат өткен айларда «төленбеген» болып көринбеўи ушын
+    c.execute("ALTER TABLE credits ADD COLUMN IF NOT EXISTS start_month TEXT")
+    c.execute("ALTER TABLE fixed_expenses ADD COLUMN IF NOT EXISTS start_month TEXT")
 
     c.execute("SELECT COUNT(*) FROM credits")
     if c.fetchone()[0] == 0:
