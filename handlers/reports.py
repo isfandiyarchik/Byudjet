@@ -1,10 +1,9 @@
-from database import get_conn, get_credits_for_month, get_fixed_for_month
-from datetime import datetime
+from database import get_conn
 from io import StringIO, BytesIO
 import csv
 import re
 import telebot
-from common import with_cancel
+from common import with_cancel, uz_now
 from chart import generate_expense_pie_chart
 from summary import get_month_stats, format_month_text
 from yearly_report import generate_yearly_report
@@ -17,19 +16,26 @@ MONTHS_RU = {
 
 def register_report_handlers(bot):
 
+    def back_markup(date_filter):
+        """Өзгертиўден кейин сол айдың есабына қайтыў түймеси."""
+        m = telebot.types.InlineKeyboardMarkup()
+        m.add(telebot.types.InlineKeyboardButton(
+            f"🔙 {date_filter} есабына қайтыў", callback_data=f"rep_{date_filter}"))
+        return m
+
     @bot.message_handler(func=lambda m: m.text == "📊 Есап")
     def report_period(message):
-        now = datetime.now()
+        cur = uz_now()
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton(
-            f"📅 {now.year} жыллық толық Excel есабы", callback_data=f"yearxlsx_{now.year}"
+            f"📅 {cur.year} жыллық толық Excel есабы", callback_data=f"yearxlsx_{cur.year}"
         ))
         for month_num in range(1, 13):
-            year = now.year
+            year = cur.year
             month_str = f"{year}-{month_num:02d}"
-            if month_num < now.month:
+            if month_num < cur.month:
                 label = f"📅 {MONTHS_RU[month_num]} {year}"
-            elif month_num == now.month:
+            elif month_num == cur.month:
                 label = f"📅 {MONTHS_RU[month_num]} {year} ← бул ай"
             else:
                 label = f"✏️ {MONTHS_RU[month_num]} {year} — план"
@@ -45,7 +51,7 @@ def register_report_handlers(bot):
         year = int(date_filter.split("-")[0])
         month_num = int(date_filter.split("-")[1])
 
-        today = datetime.now()
+        today = uz_now()
         conn = get_conn()
         stats = get_month_stats(date_filter, conn, today)
         conn.close()
@@ -104,7 +110,7 @@ def register_report_handlers(bot):
     def show_chart(call):
         date_filter = call.data[9:]
         conn = get_conn()
-        stats = get_month_stats(date_filter, conn, datetime.now())
+        stats = get_month_stats(date_filter, conn, uz_now())
         conn.close()
 
         labeled = []
@@ -134,14 +140,14 @@ def register_report_handlers(bot):
         bot.answer_callback_query(call.id, "📊 Таярланды!")
         bot.send_photo(call.message.chat.id, buf, caption=f"📊 {date_filter} — харажат ҳәм кирис бөлистириўи")
 
-    # ЖАҢА: толық жылдық Excel есабы (12 парақ + график)
+    # ТАЗА: толық жыллық Excel есабы (12 бет + график)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("yearxlsx_"))
     def yearly_excel(call):
         year = int(call.data[9:])
         bot.answer_callback_query(call.id, "📅 Таярланып атыр, бир аз күтиң...")
         buf = generate_yearly_report(year)
         bot.send_document(call.message.chat.id, buf,
-                          caption=f"📅 {year} жылдың толық есабы (ҳәр ай — бөлек парақ, график пенен)")
+                          caption=f"📅 {year} жылдың толық есабы (ҳәр ай — бөлек бөлек, график пенен)")
 
     # CSV экспорт
     @bot.callback_query_handler(func=lambda call: call.data.startswith("csvrep_"))
@@ -153,7 +159,7 @@ def register_report_handlers(bot):
         income_rows = c.fetchall()
         c.execute("SELECT category, amount, created_at FROM other_expenses WHERE created_at LIKE %s", (f"{date_filter}%",))
         other_rows = c.fetchall()
-        stats = get_month_stats(date_filter, conn, datetime.now())
+        stats = get_month_stats(date_filter, conn, uz_now())
         conn.close()
 
         output = StringIO()
@@ -230,7 +236,7 @@ def register_report_handlers(bot):
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
 
-    # 🗑 Кредит жою (тек сол айға)
+    # 🗑 Кредит удалить (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fdc_"))
     def future_del_credit(call):
         parts = call.data.split("_")
@@ -298,7 +304,7 @@ def register_report_handlers(bot):
         except ValueError:
             bot.send_message(message.chat.id, "❌ Қате! 1-31 арасында жазың.")
 
-    # 🗑 Тұрақлы жою (тек сол айға)
+    # 🗑 Тұрақлы удалить (тек сол айға)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fdf_"))
     def future_del_fixed(call):
         parts = call.data.split("_")
