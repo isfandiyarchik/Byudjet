@@ -1,8 +1,8 @@
 from database import get_conn, get_category_limit, get_credits_for_month, get_fixed_for_month
-from summary import get_available
-from datetime import datetime
+from summary import get_available, get_arrears, get_month_stats, month_label
+import re
 import telebot
-from common import is_admin, with_cancel
+from common import is_admin, with_cancel, uz_now
 
 def register_expense_handlers(bot):
 
@@ -12,6 +12,15 @@ def register_expense_handlers(bot):
         if is_admin(message.from_user.id):
             markup.add(telebot.types.InlineKeyboardButton("🔴 Кредит төлеми", callback_data="exp_credit"))
             markup.add(telebot.types.InlineKeyboardButton("🟡 Тұрақлы харажат", callback_data="exp_fixed"))
+            conn = get_conn()
+            try:
+                arrears = get_arrears(conn)
+            finally:
+                conn.close()
+            if arrears:
+                total = sum(a[3] for a in arrears)
+                markup.add(telebot.types.InlineKeyboardButton(
+                    f"⚠️ Өткен ай қарызлары: {total:,.0f} сум", callback_data="exp_arrears"))
         markup.add(telebot.types.InlineKeyboardButton("🟢 Басқа харажат", callback_data="exp_other"))
         bot.send_message(message.chat.id, "Харажат түрин таңла:", reply_markup=markup)
 
@@ -20,7 +29,7 @@ def register_expense_handlers(bot):
         if not is_admin(call.from_user.id):
             bot.answer_callback_query(call.id, "❌ Бул тек админ ушын!")
             return
-        month = datetime.now().strftime("%Y-%m")
+        month = uz_now().strftime("%Y-%m")
         conn = get_conn()
         c = conn.cursor()
         credits = [(cid, name, amount) for cid, name, amount, _ in get_credits_for_month(month, conn=conn)]
@@ -45,7 +54,7 @@ def register_expense_handlers(bot):
         if not is_admin(call.from_user.id):
             bot.answer_callback_query(call.id, "❌ Бул тек админ ушын!")
             return
-        month = datetime.now().strftime("%Y-%m")
+        month = uz_now().strftime("%Y-%m")
         conn = get_conn()
         c = conn.cursor()
         fixed = [(fid, name, amount) for fid, name, amount, _ in get_fixed_for_month(month, conn=conn)]
@@ -64,6 +73,123 @@ def register_expense_handlers(bot):
             bot.send_message(call.message.chat.id, "✅ Бул айдағы барлық тұрақлы харажатлар төленген!")
             return
         bot.send_message(call.message.chat.id, "Қайси харажат?", reply_markup=markup)
+
+    # ------------------- Өткен айлардан төленбеген қарызлар -------------------
+
+    def _parse_arrear(data):
+        """'parp_credit_12_2026-10' -> ('credit', 12, '2026-10') ямаса None"""
+        parts = data.split("_")
+        if (len(parts) != 4 or parts[1] not in ("credit", "fixed")
+                or not parts[2].isdigit() or not re.fullmatch(r"\d{4}-\d{2}", parts[3])):
+            return None
+        return parts[1], int(parts[2]), parts[3]
+
+    def _find_arrear(arrears, kind, iid, month):
+        return next((a for a in arrears if a[0] == kind and a[1] == iid and a[5] == month), None)
+
+    @bot.callback_query_handler(func=lambda call: call.data == "exp_arrears")
+    def show_arrears(call):
+        if not is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ Бул тек админ ушын!")
+            return
+        bot.answer_callback_query(call.id)
+        conn = get_conn()
+        arrears = get_arrears(conn)
+        conn.close()
+        if not arrears:
+            bot.send_message(call.message.chat.id, "✅ Өткен айлардан төленбегени жоқ!")
+            return
+        markup = telebot.types.InlineKeyboardMarkup()
+        for kind, iid, name, amount, day, m in arrears:
+            icon = "🔴" if kind == "credit" else "🟡"
+            markup.row(
+                telebot.types.InlineKeyboardButton(
+                    f"✅ {icon} {name}: {amount:,.0f} ({month_label(m)})",
+                    callback_data=f"parp_{kind}_{iid}_{m}"),
+                telebot.types.InlineKeyboardButton("❌", callback_data=f"arrs_{kind}_{iid}_{m}"),
+            )
+        bot.send_message(call.message.chat.id,
+                         "⚠️ <b>Өткен айлардан төленбегенлер</b>\n"
+                         "✅ — төлеў\n"
+                         "❌ — есаптан алып тастаў (төленбейди, сумма қалдыққа қайтады)",
+                         reply_markup=markup, parse_mode='HTML')
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("parp_"))
+    def pay_arrear(call):
+        if not is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ Бул тек админ ушын!")
+            return
+        parsed = _parse_arrear(call.data)
+        if parsed is None:
+            bot.answer_callback_query(call.id, "❌ Қәте дерек")
+            return
+        kind, iid, m = parsed
+
+        conn = get_conn()
+        c = conn.cursor()
+        item = _find_arrear(get_arrears(conn), kind, iid, m)
+        if item is None:
+            conn.close()
+            bot.answer_callback_query(call.id, "⚠️ Бул төлем әллекашан төленген ямаса есаптан алынған!")
+            return
+        name, amount = item[2], item[3]
+
+        stats = get_month_stats(uz_now().strftime("%Y-%m"), conn)
+        available = stats["available"]
+        # Қарыз суммасы қалдықтан алдын алынып қойылған, сонлықтан нағыз қолдағы ақша:
+        cash = available + stats["arrears_total"]
+
+        if cash >= amount:
+            c.execute(
+                "INSERT INTO payments (type, ref_id, amount, status, month, created_at) VALUES (%s,%s,%s,%s,%s,%s)",
+                (kind, iid, amount, "paid", m, str(uz_now())))
+            conn.commit()
+            conn.close()
+            bot.answer_callback_query(call.id, f"✅ {name} төленди!")
+            bot.send_message(call.message.chat.id,
+                             f"✅ <b>{name}</b> ({month_label(m)}): <b>-{amount:,.0f} сум</b> төленди!\n"
+                             f"💰 Қолда бар: <b>{available:,.0f} сум</b>\n"
+                             f"<i>(бул сумма алдын қалдықтан алынып қойылған еди)</i>",
+                             parse_mode='HTML')
+        else:
+            conn.close()
+            bot.answer_callback_query(call.id, "❌ Бюджет жетиспейди!")
+            bot.send_message(call.message.chat.id,
+                             f"⚠️ Бюджет жетиспейди!\n"
+                             f"• {name} ({month_label(m)}): {amount:,.0f} сум керек\n"
+                             f"• Қолда бар ақша: {cash:,.0f} сум\n"
+                             f"• Айырма: -{amount - cash:,.0f} сум\n\n"
+                             f"Бюджетти толтырың!")
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("arrs_"))
+    def skip_arrear(call):
+        if not is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ Бул тек админ ушын!")
+            return
+        parsed = _parse_arrear(call.data)
+        if parsed is None:
+            bot.answer_callback_query(call.id, "❌ Қәте дерек")
+            return
+        kind, iid, m = parsed
+
+        conn = get_conn()
+        c = conn.cursor()
+        item = _find_arrear(get_arrears(conn), kind, iid, m)
+        if item is None:
+            conn.close()
+            bot.answer_callback_query(call.id, "⚠️ Бул төлем әллекашан төленген ямаса есаптан алынған!")
+            return
+        name, amount = item[2], item[3]
+        c.execute(
+            "INSERT INTO payments (type, ref_id, amount, status, month, created_at) VALUES (%s,%s,%s,%s,%s,%s)",
+            (kind, iid, 0, "skipped", m, str(uz_now())))
+        conn.commit()
+        conn.close()
+        bot.answer_callback_query(call.id, "✅ Есаптан алып тасланды")
+        bot.send_message(call.message.chat.id,
+                         f"❌ <b>{name}</b> ({month_label(m)}) есаптан алып тасланды.\n"
+                         f"Қалдыққа <b>+{amount:,.0f} сум</b> қайтты.",
+                         parse_mode='HTML')
 
     @bot.callback_query_handler(func=lambda call: call.data == "exp_other")
     def other_category(call):
@@ -109,7 +235,7 @@ def register_expense_handlers(bot):
     def save_other_expense(message, category, telegram_id):
         try:
             amount = float(message.text.replace(",", "").replace(" ", ""))
-            month = datetime.now().strftime("%Y-%m")
+            month = uz_now().strftime("%Y-%m")
             conn = get_conn()
             c = conn.cursor()
 
@@ -128,7 +254,7 @@ def register_expense_handlers(bot):
 
             c.execute(
                 "INSERT INTO other_expenses (telegram_id, category, amount, created_at) VALUES (%s,%s,%s,%s)",
-                (telegram_id, category, amount, str(datetime.now())))
+                (telegram_id, category, amount, str(uz_now())))
             conn.commit()
 
             # Категория лимитин тексериў
@@ -203,7 +329,7 @@ def register_expense_handlers(bot):
             bot.answer_callback_query(call.id, "❌ Бул тек админ ушын!")
             return
         cid = int(call.data.split("_")[1])
-        month = datetime.now().strftime("%Y-%m")
+        month = uz_now().strftime("%Y-%m")
 
         conn = get_conn()
         c = conn.cursor()
@@ -235,7 +361,7 @@ def register_expense_handlers(bot):
             c = conn.cursor()
             c.execute(
                 "INSERT INTO payments (type, ref_id, amount, status, month, created_at) VALUES (%s,%s,%s,%s,%s,%s)",
-                ("credit", cid, amount, "paid", month, str(datetime.now())))
+                ("credit", cid, amount, "paid", month, str(uz_now())))
             conn.commit()
             conn.close()
             bot.answer_callback_query(call.id, f"✅ {name} төленди!")
@@ -257,7 +383,7 @@ def register_expense_handlers(bot):
             bot.answer_callback_query(call.id, "❌ Бул тек админ ушын!")
             return
         fid = int(call.data.split("_")[1])
-        month = datetime.now().strftime("%Y-%m")
+        month = uz_now().strftime("%Y-%m")
 
         conn = get_conn()
         c = conn.cursor()
@@ -289,7 +415,7 @@ def register_expense_handlers(bot):
             c = conn.cursor()
             c.execute(
                 "INSERT INTO payments (type, ref_id, amount, status, month, created_at) VALUES (%s,%s,%s,%s,%s,%s)",
-                ("fixed", fid, amount, "paid", month, str(datetime.now())))
+                ("fixed", fid, amount, "paid", month, str(uz_now())))
             conn.commit()
             conn.close()
             bot.answer_callback_query(call.id, f"✅ {name} төленди!")
