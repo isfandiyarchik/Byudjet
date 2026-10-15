@@ -4,7 +4,10 @@ from pytz import timezone
 from database import get_conn, get_credits_for_month, get_fixed_for_month
 from datetime import datetime, timedelta
 from backup import generate_backup
-from summary import get_month_stats, format_month_text
+from common import is_allowed, uz_now
+from apscheduler.events import EVENT_JOB_ERROR
+from alerts import notify_admins
+from summary import get_month_stats, format_month_text, get_arrears, month_label
 
 UZ_TZ = timezone("Asia/Tashkent")
 
@@ -18,6 +21,12 @@ def start_scheduler(bot, admin_ids):
                       args=[bot])
     scheduler.add_job(daily_backup, 'cron', hour=3, minute=0,
                       args=[bot, admin_ids])
+    def on_job_error(event):
+        if event.exception:
+            print(f"❌ Scheduler job қәтеси: {event.job_id}: {event.exception!r}")
+            notify_admins(bot, admin_ids, f"Scheduler: {event.job_id}", event.exception)
+
+    scheduler.add_listener(on_job_error, EVENT_JOB_ERROR)
     scheduler.start()
     print("✅ Scheduler иске қосылды! (Asia/Tashkent)")
 
@@ -33,19 +42,19 @@ def daily_backup(bot, admin_ids):
 
 def morning_summary(bot):
     print(f"🌅 Азанда хабарлама жиберилди... {datetime.now(UZ_TZ)}")
-    today = datetime.now(UZ_TZ).replace(tzinfo=None)
+    today = uz_now()
     month = today.strftime("%Y-%m")
 
     conn = get_conn()
     c = conn.cursor()
     stats = get_month_stats(month, conn, today)
     c.execute("SELECT telegram_id FROM users")
-    users = c.fetchall()
+    users = [u for (u,) in c.fetchall() if is_allowed(u)]
     conn.close()
 
     text = "🌅 <b>Қайырлы таң!</b>\n\n" + format_month_text(stats, today)
 
-    for (telegram_id,) in users:
+    for telegram_id in users:
         try:
             bot.send_message(telegram_id, text, parse_mode='HTML')
             print(f"✅ Азанда хабар жиберилди: {telegram_id}")
@@ -75,7 +84,7 @@ def check_credit_reminders(bot, admin_ids):
         conn = get_conn()
         c = conn.cursor()
         c.execute("SELECT telegram_id FROM users")
-        users = c.fetchall()
+        users = [u for (u,) in c.fetchall() if is_allowed(u)]
         conn.close()
 
         months_kk = {
@@ -96,7 +105,7 @@ def check_credit_reminders(bot, admin_ids):
             text += f"• {name}: <b>{float(amount):,.0f} сум</b>\n"
             text += f"  Төлем күни: {pay_day}-{get_remind_month(pay_day)}\n\n"
 
-        for (telegram_id,) in users:
+        for telegram_id in users:
             try:
                 bot.send_message(telegram_id, text, parse_mode='HTML')
                 print(f"✅ Хабар жиберилди: {telegram_id}")
@@ -108,19 +117,20 @@ def monthly_payment_reminder(bot, admin_ids):
     conn = get_conn()
     c = conn.cursor()
 
-    month = datetime.now(UZ_TZ).strftime("%Y-%m")
+    month = uz_now().strftime("%Y-%m")
 
     # Override ескеретін функциялар
     credits = get_credits_for_month(month)
     fixed = get_fixed_for_month(month)
 
     c.execute("SELECT telegram_id FROM users")
-    users = c.fetchall()
+    users = [u for (u,) in c.fetchall() if is_allowed(u)]
 
     c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='credit'", (month,))
     paid_credit_ids = {row[0] for row in c.fetchall()}
     c.execute("SELECT ref_id FROM payments WHERE month=%s AND status='paid' AND type='fixed'", (month,))
     paid_fixed_ids = {row[0] for row in c.fetchall()}
+    arrears = get_arrears(conn, uz_now())
     conn.close()
 
     markup = telebot.types.InlineKeyboardMarkup()
@@ -142,7 +152,17 @@ def monthly_payment_reminder(bot, admin_ids):
                 callback_data=f"pf_{fid}"
             ))
 
-    for (telegram_id,) in users:
+    if arrears:
+        text += "\n⚠️ <b>Өткен айлардан төленбегенлер:</b>\n"
+        for kind, iid, name, amount, day, m in arrears:
+            icon = "💳" if kind == "credit" else "🏠"
+            text += f"{icon} {name} ({month_label(m)}): <b>{float(amount):,.0f} сум</b>\n"
+            markup.add(telebot.types.InlineKeyboardButton(
+                f"✅ {name} ({month_label(m)}) төледим",
+                callback_data=f"parp_{kind}_{iid}_{m}"
+            ))
+
+    for telegram_id in users:
         try:
             bot.send_message(telegram_id, text, reply_markup=markup, parse_mode='HTML')
             print(f"✅ Ай басы хабары жиберилди: {telegram_id}")
