@@ -1,7 +1,6 @@
 from database import get_conn
-from datetime import datetime
 import telebot
-from common import with_cancel
+from common import with_cancel, uz_now
 
 def register_budget_handlers(bot):
 
@@ -33,7 +32,7 @@ def register_budget_handlers(bot):
             c = conn.cursor()
             c.execute(
                 "INSERT INTO budget (telegram_id, source, amount, created_at) VALUES (%s,%s,%s,%s)",
-                (telegram_id, source, amount, str(datetime.now())))
+                (telegram_id, source, amount, str(uz_now())))
             conn.commit()
             conn.close()
             bot.send_message(message.chat.id, f"✅ {source}: +{amount:,.0f} сум қосылды!")
