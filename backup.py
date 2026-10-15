@@ -1,7 +1,7 @@
 import json
 from io import BytesIO
-from datetime import datetime
 from database import get_conn
+from common import uz_now
 
 TABLES = [
     "users", "budget", "credits", "fixed_expenses", "other_expenses",
@@ -26,6 +26,5 @@ def generate_backup():
 
     payload = json.dumps(data, default=str, ensure_ascii=False, indent=2)
     buf = BytesIO(payload.encode("utf-8"))
-    buf.name = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    buf.name = f"backup_{uz_now().strftime('%Y%m%d_%H%M%S')}.json"
     return buf
-
