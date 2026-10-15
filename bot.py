@@ -1,13 +1,15 @@
 import telebot
 import os
+import json
 from flask import Flask, request
 from dotenv import load_dotenv
-from datetime import datetime
 from database import init_db, get_conn, get_credits_for_month, get_fixed_for_month, freeze_past_months
 from scheduler import start_scheduler
 from summary import get_month_stats, format_month_text
 from backup import generate_backup
-from common import ADMIN_IDS, is_admin, with_cancel
+from common import ADMIN_IDS, is_admin, with_cancel, uz_now
+from access import gate
+from alerts import AdminExceptionHandler, notify_admins
 from handlers.budget import register_budget_handlers
 from handlers.expenses import register_expense_handlers
 from handlers.reports import register_report_handlers
@@ -16,7 +18,9 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://byudjet.onrender.com")
 
-bot = telebot.TeleBot(BOT_TOKEN)
+error_handler = AdminExceptionHandler(ADMIN_IDS)
+bot = telebot.TeleBot(BOT_TOKEN, exception_handler=error_handler)
+error_handler.bot = bot
 app = Flask(__name__)
 
 init_db()
@@ -27,9 +31,17 @@ def home():
 
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
-    json_str = request.get_data().decode('UTF-8')
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
+    try:
+        json_str = request.get_data().decode('UTF-8')
+        # Кириў бақлаўы: рухсаты жоқ адамның update и кирилмейди
+        if not gate(bot, json.loads(json_str)):
+            return 'OK', 200
+        update = telebot.types.Update.de_json(json_str)
+        bot.process_new_updates([update])
+    except Exception as e:
+        # 200 қайтарамыз, болмаса Telegram усы update ти қайта-қайта жибере береди
+        print(f"❌ Webhook қәтеси: {e!r}")
+        notify_admins(bot, ADMIN_IDS, "Webhook", e)
     return 'OK', 200
 
 def main_menu():
@@ -48,12 +60,19 @@ def start(message):
     if not user:
         is_admin_flag = 1 if is_admin(message.from_user.id) else 0
         c.execute("INSERT INTO users (telegram_id, name, is_admin, created_at) VALUES (%s,%s,%s,%s)",
-                  (message.from_user.id, message.from_user.first_name, is_admin_flag, str(datetime.now())))
+                  (message.from_user.id, message.from_user.first_name, is_admin_flag, str(uz_now())))
         conn.commit()
     conn.close()
     bot.send_message(message.chat.id,
                      f"Ассалаума алейкум, {message.from_user.first_name}! 👋\nБюджет ботына хош келдиңиз!",
                      reply_markup=main_menu())
+
+@bot.message_handler(commands=["testerror"])
+def test_error(message):
+    # Админге хабар келетуғынын тексериў ушын (тек админ)
+    if not is_admin(message.from_user.id):
+        return
+    raise RuntimeError("Бул сынақ қәтеси (/testerror). Ботта ҳеш қандай мәселе жоқ.")
 
 @bot.message_handler(commands=["cancel"])
 def cancel_command(message):
@@ -72,7 +91,7 @@ def manual_backup(message):
 @bot.message_handler(func=lambda m: m.text == "🏠 Баслапқы бет")
 def dashboard(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    today = datetime.now()
+    today = uz_now()
     month = today.strftime("%Y-%m")
     conn = get_conn()
     stats = get_month_stats(month, conn, today)
@@ -153,7 +172,7 @@ def cat_limit_amount(message, category):
 
 @bot.callback_query_handler(func=lambda call: call.data == "set_credit")
 def set_credit_menu(call):
-    month = datetime.now().strftime("%Y-%m")
+    month = uz_now().strftime("%Y-%m")
     credits = get_credits_for_month(month)
     markup = telebot.types.InlineKeyboardMarkup()
     for cid, name, amount, pay_day in credits:
@@ -165,7 +184,7 @@ def set_credit_menu(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "del_credit")
 def del_credit_menu(call):
-    month = datetime.now().strftime("%Y-%m")
+    month = uz_now().strftime("%Y-%m")
     credits = get_credits_for_month(month)
     markup = telebot.types.InlineKeyboardMarkup()
     for cid, name, amount, _ in credits:
@@ -185,7 +204,7 @@ def delete_credit(call):
     freeze_past_months("credit", cid, conn)
     c.execute("UPDATE credits SET is_active=0 WHERE id=%s", (cid,))
     c.execute("DELETE FROM credit_overrides WHERE credit_id=%s AND month >= %s",
-              (cid, datetime.now().strftime("%Y-%m")))
+              (cid, uz_now().strftime("%Y-%m")))
     conn.commit()
     conn.close()
     bot.answer_callback_query(call.id, f"✅ {name} оширилди!")
@@ -193,7 +212,7 @@ def delete_credit(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "del_fixed")
 def del_fixed_menu(call):
-    month = datetime.now().strftime("%Y-%m")
+    month = uz_now().strftime("%Y-%m")
     fixed = get_fixed_for_month(month)
     markup = telebot.types.InlineKeyboardMarkup()
     for fid, name, amount, _ in fixed:
@@ -213,7 +232,7 @@ def delete_fixed(call):
     freeze_past_months("fixed", fid, conn)
     c.execute("UPDATE fixed_expenses SET is_active=0 WHERE id=%s", (fid,))
     c.execute("DELETE FROM fixed_overrides WHERE fixed_id=%s AND month >= %s",
-              (fid, datetime.now().strftime("%Y-%m")))
+              (fid, uz_now().strftime("%Y-%m")))
     conn.commit()
     conn.close()
     bot.answer_callback_query(call.id, f"✅ {name} оширилди!")
@@ -255,7 +274,7 @@ def save_credit_day(message, cid, amount):
 
 @bot.callback_query_handler(func=lambda call: call.data == "set_fixed")
 def set_fixed_menu(call):
-    month = datetime.now().strftime("%Y-%m")
+    month = uz_now().strftime("%Y-%m")
     fixed = get_fixed_for_month(month)
     markup = telebot.types.InlineKeyboardMarkup()
     for fid, name, amount, pay_day in fixed:
@@ -327,8 +346,8 @@ def add_credit_day(message, name, amount):
             raise ValueError
         conn = get_conn()
         c = conn.cursor()
-        c.execute("INSERT INTO credits (name, amount, pay_day, is_active) VALUES (%s,%s,%s,1)",
-                  (name, amount, day))
+        c.execute("INSERT INTO credits (name, amount, pay_day, is_active, start_month) VALUES (%s,%s,%s,1,%s)",
+                  (name, amount, day, uz_now().strftime("%Y-%m")))
         conn.commit()
         conn.close()
         bot.send_message(message.chat.id,
@@ -368,8 +387,8 @@ def add_fixed_day(message, name, amount):
             raise ValueError
         conn = get_conn()
         c = conn.cursor()
-        c.execute("INSERT INTO fixed_expenses (name, amount, pay_day, is_active) VALUES (%s,%s,%s,1)",
-                  (name, amount, day))
+        c.execute("INSERT INTO fixed_expenses (name, amount, pay_day, is_active, start_month) VALUES (%s,%s,%s,1,%s)",
+                  (name, amount, day, uz_now().strftime("%Y-%m")))
         conn.commit()
         conn.close()
         bot.send_message(message.chat.id,
