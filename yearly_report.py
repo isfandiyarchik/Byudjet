@@ -2,8 +2,8 @@ import openpyxl
 from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Font, PatternFill, Alignment
 from io import BytesIO
-from datetime import datetime
 from database import get_conn
+from common import uz_now
 from summary import get_month_stats, build_carry_map
 
 MONTHS_RU = {
@@ -38,16 +38,17 @@ def generate_yearly_report(year):
     """
     wb = openpyxl.Workbook()
     summary_ws = wb.active
-    summary_ws.title = "Жыллық есабы"
+    summary_ws.title = "Жыллық есабаты"
 
     summary_ws.append(["Ай", "Кирис", "Кредитлер", "Тұрақлы харажатлар",
-                        "Басқа харажатлар", "Улыма харажат", "Қалды", "Алдынғы айдан қалдық"])
+                        "Басқа харажатлар", "Улыма харажат", "Қалды", "Алдынғы айдан қалдық",
+                        "Төленбей қалған (қарыз)"])
     _style_header_row(summary_ws)
 
     # ТҮЗЕТИЛДИ (тезлик): бурын ҳәр ай ушын 3 бөлек байланыс ашылатын еди (12 айға — 36 байланыс).
     # Енди бир ғана байланыс барлық 12 айға бирдей қолланылады.
     conn = get_conn()
-    today = datetime.now()
+    today = uz_now()
     carry_map = build_carry_map(conn, f"{year}-12", today)
 
     for month_num in range(1, 13):
@@ -57,17 +58,17 @@ def generate_yearly_report(year):
         income = st["income_total"]
         other_total = st["other_total"]
         if st["is_future"]:
-            # жоспар айы: жоспарланған сумма
+            # план айы: ойласылған сумма
             credit_total, fixed_total = st["credit_total"], st["fixed_total"]
         else:
-            # өткен/ағымдағы ай: тек нағыз төленгени
+            # өткен/усы ай: тек нағыз төленгени
             credit_total, fixed_total = st["paid_credit_total"], st["paid_fixed_total"]
         total_expense = credit_total + fixed_total + other_total
-        remaining = st["carry_in"] + income - total_expense
+        remaining = st["carry_in"] + income - total_expense - st["reserved"]
 
         month_name = MONTHS_RU[month_num]
         summary_ws.append([month_name, income, credit_total, fixed_total,
-                           other_total, total_expense, remaining, st["carry_in"]])
+                           other_total, total_expense, remaining, st["carry_in"], st["reserved"]])
 
         # ---- Per-month detail sheet ----
         ws = wb.create_sheet(title=month_name)
@@ -95,6 +96,8 @@ def generate_yearly_report(year):
         ws.append(["Алдынғы айдан қалдық", "", st["carry_in"]])
         ws.append(["Кирис", "", income])
         ws.append(["Улыума харажат", "", total_expense])
+        if st["reserved"] > 0:
+            ws.append(["Төленбей қалған (кейинги айға қарыз)", "", st["reserved"]])
         ws.append(["Қалды", "", remaining])
         _autosize_columns(ws)
 
