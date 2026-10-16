@@ -12,6 +12,7 @@
    Бул қағыйда ARREARS_FROM айынан (әдеттегиде 2026-10) баслап ислейди,
    сонда ески айлардың мәлиметлери отирик қарыз шығармайды.
 """
+import calendar
 import os
 import re
 from common import uz_now
@@ -230,99 +231,219 @@ def get_available(month, conn, today=None):
     return get_month_stats(month, conn, today)["available"]
 
 
-def _pay_label(pay_day, month, today):
-    name = month_label(month)
-    if month == _current_month(today) and pay_day < today.day:
-        return f"⚠️ {pay_day}-{name}, мерзими өтти"
-    return f"{pay_day}-{name}"
+SEP = "━━━━━━━━━━━━━━━━━━"
+BAR_LEN = 10
+
+
+def _bar(ratio):
+    filled = min(BAR_LEN, max(0, int(round(min(ratio, 1.0) * BAR_LEN))))
+    return "▓" * filled + "░" * (BAR_LEN - filled)
+
+
+def _progress_line(stats):
+    """«🟢 ▓▓▓▓▓▓░░░░ 60% жумсалды» — кирис (қалдық пенен бирге) тың қанша жумсалғаны."""
+    base = stats["carry_in"] + stats["income_total"]
+    if base <= 0:
+        return ""
+    ratio = max(0.0, stats["circulating"] / base)
+    pct = int(round(ratio * 100))
+    icon = "🟢" if pct < 70 else ("🟡" if pct < 90 else "🔴")
+    return f"{icon} {_bar(ratio)} <b>{pct}%</b> жумсалды"
+
+
+def _days_in_month(today):
+    return calendar.monthrange(today.year, today.month)[1]
+
+
+def _title_default(month):
+    y, m = month.split("-")
+    return f"📅 {MONTHS_KK[int(m)].capitalize()} {y}"
+
+
+def _split_pending(stats, today):
+    """
+    Төленбегенлерди (сумма > 0) мерзими өткенлерге ҳәм алдағыларға бөледи.
+    Мерзим тек усы айда есапланады. Қайтарады: (өткен, алдағы) — ҳәр бири
+    [(түри, аты, сумма, күн)] дизими, күн бойынша сыпатланған.
+    """
+    items = ([("credit", n, a, d) for _, n, a, d in stats["pending_credits"] if a > 0]
+             + [("fixed", n, a, d) for _, n, a, d in stats["pending_fixed"] if a > 0])
+    items.sort(key=lambda x: x[3])
+    if stats["month"] != _current_month(today):
+        return [], items
+    overdue = [x for x in items if x[3] < today.day]
+    upcoming = [x for x in items if x[3] >= today.day]
+    return overdue, upcoming
+
+
+def _icon(kind):
+    return "🔴" if kind == "credit" else "🟡"
+
+
+def _overdue_block(overdue, month, today):
+    mon = month_label(month)
+    text = "🚨 <b>Мерзими өткен төлемлер:</b>\n"
+    for kind, name, a, d in overdue:
+        text += f"  • {_icon(kind)} {name}: <b>{a:,.0f} сум</b> — {d}-{mon}, <i>{today.day - d} күн өтти</i>\n"
+    text += f"  <b>Итого: {sum(x[2] for x in overdue):,.0f} сум</b>\n"
+    text += "  <i>(бюджетке киргизилмеген)</i>"
+    return text
+
+
+def _pending_block(upcoming, month, today):
+    mon = month_label(month)
+    cur = month == _current_month(today)
+    text = "⏳ <b>Төленбеген (бюджетке киргизилмейди):</b>\n"
+    for kind, name, a, d in upcoming:
+        when = "📌 бүгин" if (cur and d == today.day) else f"{d}-{mon}"
+        text += f"  • {_icon(kind)} {name}: <b>{a:,.0f} сум</b> ({when})\n"
+    text += f"  <b>Төлениўи керек: {sum(x[2] for x in upcoming):,.0f} сум</b>"
+    return text
 
 
 def format_month_text(stats, today=None, title=None):
     today = today or uz_now()
     month = stats["month"]
-    text = f"{title}\n\n" if title else ""
-
     carry = stats["carry_in"]
+    title_line = f"<b>{title or _title_default(month)}</b>"
+    sections = []
 
     # ---------------- План айы ----------------
     if stats["is_future"]:
-        if carry != 0 or stats["income_by_source"]:
-            text += "📥 <b>Кирис:</b>\n"
-            if carry != 0:
-                text += f"  • ↪️ Өтетуғын қалдық (план): <b>{carry:+,.0f} сум</b>\n"
-            for s, a in stats["income_by_source"]:
-                text += f"  • {s}: <b>+{a:,.0f} сум</b>\n"
-            text += f"  <b>Итого: {carry + stats['income_total']:+,.0f} сум</b>\n\n"
-        text += "🔴 <b>Кредитлер:</b>\n"
-        for _, name, amount, _ in stats["credits"]:
-            text += f"  • {name}: <b>{amount:,.0f} сум</b>\n"
-        text += f"  <b>Итого: -{stats['credit_total']:,.0f} сум</b>\n"
-        text += "\n🟡 <b>Тұрақлы харажатлар:</b>\n"
-        for _, name, amount, _ in stats["fixed"]:
-            text += f"  • {name}: <b>{amount:,.0f} сум</b>\n"
-        text += f"  <b>Итого: -{stats['fixed_total']:,.0f} сум</b>\n"
-        if stats["other_by_cat"]:
-            text += "\n🟢 <b>Басқа харажатлар:</b>\n"
-            for cat, a in stats["other_by_cat"]:
-                text += f"  • {cat}: <b>-{a:,.0f} сум</b>\n"
-            text += f"  <b>Итого: -{stats['other_total']:,.0f} сум</b>\n"
         forecast = carry + stats["income_total"] - stats["planned_expense"]
-        text += f"\n💼 Ойласылған жәми харажат: <b>{stats['planned_expense']:,.0f} сум</b>\n"
-        text += "\n──────────────────\n"
-        text += f"💰 <b>План қалдық: {forecast:,.0f} сум</b>"
-        return text
+        sections.append(f"{title_line}\n✏️ План айы  |  💰 <b>План қалдық: {forecast:,.0f} сум</b>")
+
+        if carry != 0 or stats["income_by_source"]:
+            t = "📥 <b>Кирис:</b>\n"
+            if carry != 0:
+                t += f"  • ↪️ Өтетуғын қалдық (план): <b>{carry:+,.0f} сум</b>\n"
+            for s, a in stats["income_by_source"]:
+                t += f"  • {s}: <b>+{a:,.0f} сум</b>\n"
+            t += f"  <b>Итого: {carry + stats['income_total']:+,.0f} сум</b>"
+            sections.append(t)
+
+        blocks = []
+        t = "🔴 <b>Кредитлер:</b>\n"
+        for _, name, amount, _ in stats["credits"]:
+            t += f"  • {name}: <b>{amount:,.0f} сум</b>\n"
+        t += f"  <b>Итого: -{stats['credit_total']:,.0f} сум</b>"
+        blocks.append(t)
+        t = "🟡 <b>Тұрақлы харажатлар:</b>\n"
+        for _, name, amount, _ in stats["fixed"]:
+            t += f"  • {name}: <b>{amount:,.0f} сум</b>\n"
+        t += f"  <b>Итого: -{stats['fixed_total']:,.0f} сум</b>"
+        blocks.append(t)
+        if stats["other_by_cat"]:
+            t = "🟢 <b>Басқа харажатлар:</b>\n"
+            for cat, a in stats["other_by_cat"]:
+                t += f"  • {cat}: <b>-{a:,.0f} сум</b>\n"
+            t += f"  <b>Итого: -{stats['other_total']:,.0f} сум</b>"
+            blocks.append(t)
+        sections.append("\n\n".join(blocks))
+
+        sections.append(f"💼 Ойласылған жәми харажат: <b>{stats['planned_expense']:,.0f} сум</b>\n"
+                        f"💰 <b>План қалдық: {forecast:,.0f} сум</b>")
+        return f"\n{SEP}\n".join(sections)
 
     # ---------------- Усы / өткен ай ----------------
+    is_current = month == _current_month(today)
+    when = (f"📅 {today.day}-күн ({_days_in_month(today)} ден)" if is_current else "📅 Ай жабылады")
+    head = f"{title_line}\n💰 <b>Қолда бар: {stats['available']:,.0f} сум</b>  |  {when}"
+    bar = _progress_line(stats)
+    if bar:
+        head += f"\n{bar}"
+    sections.append(head)
+
+    overdue, upcoming = _split_pending(stats, today)
+    if overdue:
+        sections.append(_overdue_block(overdue, month, today))
+
     if carry != 0 or stats["income_by_source"]:
-        text += "📥 <b>Кирис:</b>\n"
+        t = "📥 <b>Кирис:</b>\n"
         if carry != 0:
-            text += f"  • ↪️ Алдынғы айдан өткен қалдық: <b>{carry:+,.0f} сум</b>\n"
+            t += f"  • ↪️ Алдынғы айдан өткен қалдық: <b>{carry:+,.0f} сум</b>\n"
         for s, a in stats["income_by_source"]:
-            text += f"  • {s}: <b>+{a:,.0f} сум</b>\n"
-        text += f"  <b>Итого: {carry + stats['income_total']:+,.0f} сум</b>\n\n"
+            t += f"  • {s}: <b>+{a:,.0f} сум</b>\n"
+        t += f"  <b>Итого: {carry + stats['income_total']:+,.0f} сум</b>"
+        sections.append(t)
 
+    blocks = []
     if stats["paid_credits"]:
-        text += "🔴 <b>Кредитлер (төленди):</b>\n"
+        t = "🔴 <b>Кредитлер (төленди):</b>\n"
         for name, a in stats["paid_credits"]:
-            text += f"  • {name}: <b>{a:,.0f} сум</b> ✅\n"
-        text += f"  <b>Итого: -{stats['paid_credit_total']:,.0f} сум</b>\n"
-
+            t += f"  • {name}: <b>{a:,.0f} сум</b> ✅\n"
+        t += f"  <b>Итого: -{stats['paid_credit_total']:,.0f} сум</b>"
+        blocks.append(t)
     if stats["paid_fixed"]:
-        text += "\n🟡 <b>Тұрақлы харажатлар (төленди):</b>\n"
+        t = "🟡 <b>Тұрақлы харажатлар (төленди):</b>\n"
         for name, a in stats["paid_fixed"]:
-            text += f"  • {name}: <b>{a:,.0f} сум</b> ✅\n"
-        text += f"  <b>Итого: -{stats['paid_fixed_total']:,.0f} сум</b>\n"
-
+            t += f"  • {name}: <b>{a:,.0f} сум</b> ✅\n"
+        t += f"  <b>Итого: -{stats['paid_fixed_total']:,.0f} сум</b>"
+        blocks.append(t)
     if stats["other_by_cat"]:
-        text += "\n🟢 <b>Басқа харажатлар:</b>\n"
+        t = "🟢 <b>Басқа харажатлар:</b>\n"
         for cat, a in stats["other_by_cat"]:
-            text += f"  • {cat}: <b>{a:,.0f} сум</b>\n"
-        text += f"  <b>Итого: -{stats['other_total']:,.0f} сум</b>\n"
+            t += f"  • {cat}: <b>{a:,.0f} сум</b>\n"
+        t += f"  <b>Итого: -{stats['other_total']:,.0f} сум</b>"
+        blocks.append(t)
+    if blocks:
+        sections.append("\n\n".join(blocks))
 
     # Өткен айлардан қалған қарыз (тек усы айда)
     if stats["arrears"]:
-        text += "\n⚠️ <b>Өткен айлардан төленбеген:</b>\n"
+        t = "⚠️ <b>Өткен айлардан төленбеген:</b>\n"
         for kind, _, name, a, day, m in stats["arrears"]:
-            icon = "🔴" if kind == "credit" else "🟡"
-            text += f"  • {icon} {name}: <b>{a:,.0f} сум</b> ({day}-{month_label(m)})\n"
-        text += f"  <b>Итого: {stats['arrears_total']:,.0f} сум</b>\n"
-        text += "  <i>(бул сумма қалдықтан алынып қойылған)</i>\n"
+            t += f"  • {_icon(kind)} {name}: <b>{a:,.0f} сум</b> ({day}-{month_label(m)})\n"
+        t += f"  <b>Итого: {stats['arrears_total']:,.0f} сум</b>\n"
+        t += "  <i>(бул сумма қалдықтан алынып қойылған)</i>"
+        sections.append(t)
 
-    if stats["pending_credits"] or stats["pending_fixed"]:
-        text += "\n⏳ <b>Төленбеген (бюджетке киргизилмейди):</b>\n"
-        for _, name, a, d in stats["pending_credits"]:
-            text += f"  • 🔴 {name}: <b>{a:,.0f} сум</b> ({_pay_label(d, month, today)})\n"
-        for _, name, a, d in stats["pending_fixed"]:
-            text += f"  • 🟡 {name}: <b>{a:,.0f} сум</b> ({_pay_label(d, month, today)})\n"
-        text += f"  <b>Төлениўи керек: {stats['pending_total']:,.0f} сум</b>\n"
+    if upcoming:
+        sections.append(_pending_block(upcoming, month, today))
 
-    text += "\n──────────────────\n"
-    text += f"💰 <b>Қолда бар: {stats['available']:,.0f} сум</b>\n"
-    text += f"💼 <b>Айланған бюджет: {stats['circulating']:,.0f} сум</b>\n"
-    text += "<i>(тек төленгени + басқа харажатлар)</i>"
-
+    t = (f"💰 <b>Қолда бар: {stats['available']:,.0f} сум</b>\n"
+         f"💼 <b>Айланған бюджет: {stats['circulating']:,.0f} сум</b>\n"
+         "<i>(тек төленгени + басқа харажатлар)</i>")
     if stats["reserved"] > 0:
-        text += (f"\n\n📌 Кейинги айға өткен қалдық: "
-                 f"<b>{stats['available'] - stats['reserved']:,.0f} сум</b>\n"
-                 f"<i>(төленбеген {stats['reserved']:,.0f} сум қарыз болып алынды)</i>")
-    return text
+        t += (f"\n\n📌 Кейинги айға өткен қалдық: "
+              f"<b>{stats['available'] - stats['reserved']:,.0f} сум</b>\n"
+              f"<i>(төленбеген {stats['reserved']:,.0f} сум қарыз болып алынды)</i>")
+    sections.append(t)
+    return f"\n{SEP}\n".join(sections)
+
+
+def format_morning_text(stats, today=None):
+    """Азанғы қысқа хабар: қолда бар, бүгинги төлемлер, мерзими өткенлер, қарыз."""
+    today = today or uz_now()
+    month = stats["month"]
+    mon = month_label(month)
+    lines = ["🌅 <b>Қайырлы таң!</b>",
+             f"📅 {today.day}-{mon}  ·  {today.day}/{_days_in_month(today)}",
+             "",
+             f"💰 <b>Қолда бар: {stats['available']:,.0f} сум</b>"]
+    bar = _progress_line(stats)
+    if bar:
+        lines.append(bar)
+
+    overdue, upcoming = _split_pending(stats, today)
+    due_today = [x for x in upcoming if x[3] == today.day]
+    has_info = False
+
+    if due_today:
+        has_info = True
+        lines += ["", "📌 <b>Бүгин төленеди:</b>"]
+        for kind, name, a, _ in due_today:
+            lines.append(f"  • {_icon(kind)} {name}: <b>{a:,.0f} сум</b>")
+    if overdue:
+        has_info = True
+        lines += ["", "🚨 <b>Мерзими өткен:</b>"]
+        for kind, name, a, d in overdue:
+            lines.append(f"  • {_icon(kind)} {name}: <b>{a:,.0f} сум</b> ({today.day - d} күн өтти)")
+    if stats["arrears_total"] > 0:
+        has_info = True
+        lines += ["", f"⚠️ Өткен айлардан қарыз: <b>{stats['arrears_total']:,.0f} сум</b>"]
+    if not has_info:
+        lines += ["", "✅ Бүгин төлем жоқ"]
+
+    lines += ["", "<i>Толық есап: 🏠 Баслапқы бет</i>"]
+    return "\n".join(lines)
