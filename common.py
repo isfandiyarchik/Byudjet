@@ -89,6 +89,11 @@ CANCEL_TRIGGERS = {
     "⚙️ Өзгертиў",
     "/cancel",
     "/start",
+    "/home",
+    "/income",
+    "/expense",
+    "/report",
+    "/settings",
     "❌ Бийкар етиў",
 }
 
