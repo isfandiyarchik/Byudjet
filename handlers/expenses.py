@@ -6,7 +6,7 @@ from common import is_admin, with_cancel, uz_now
 
 def register_expense_handlers(bot):
 
-    @bot.message_handler(func=lambda m: m.text == "➕ Харажат қосыў")
+    @bot.message_handler(func=lambda m: m.text in ("➖ Харажат", "➕ Харажат қосыў"))
     def expense_type(message):
         markup = telebot.types.InlineKeyboardMarkup()
         if is_admin(message.from_user.id):
