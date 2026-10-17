@@ -53,6 +53,7 @@ def register_report_handlers(bot):
                          "📊 <b>Есап дәўирин таңла:</b>\n<i>● — усы ай   ✏️ — план айлары</i>",
                          reply_markup=months_markup(uz_now()), parse_mode='HTML')
 
+    @bot.message_handler(commands=["report"])
     @bot.message_handler(func=lambda m: m.text == "📊 Есап")
     def report_period(message):
         send_period_menu(message.chat.id)
@@ -139,7 +140,7 @@ def register_report_handlers(bot):
             for _, name, amount, _ in stats["fixed"]:
                 labeled.append((f"{name}", float(amount)))
         else:
-            # Өткен/усы айда тек нағыз төленгени диаграммаға киреди
+            # Өткен/ағымдағы айда тек нағыз төленгени диаграммаға киреди
             for name, amount in stats["paid_credits"]:
                 labeled.append((name, float(amount)))
             for name, amount in stats["paid_fixed"]:
