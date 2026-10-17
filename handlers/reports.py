@@ -8,6 +8,11 @@ from chart import generate_expense_pie_chart
 from summary import get_month_stats, format_month_text
 from yearly_report import generate_yearly_report
 
+MONTHS_SHORT = {
+    1: "Янв", 2: "Фев", 3: "Мар", 4: "Апр", 5: "Май", 6: "Июн",
+    7: "Июл", 8: "Авг", 9: "Сен", 10: "Окт", 11: "Ноя", 12: "Дек"
+}
+
 MONTHS_RU = {
     1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
     5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
@@ -17,32 +22,45 @@ MONTHS_RU = {
 def register_report_handlers(bot):
 
     def back_markup(date_filter):
-        """Өзгертиўден кейин сол айдың есабына қайтыў түймеси."""
+        """Өзгертиўден кейин: сол ай есабына ҳәм айлар тизимине қайтыў."""
         m = telebot.types.InlineKeyboardMarkup()
         m.add(telebot.types.InlineKeyboardButton(
             f"🔙 {date_filter} есабына қайтыў", callback_data=f"rep_{date_filter}"))
+        m.add(telebot.types.InlineKeyboardButton("📅 Барлық айлар", callback_data="rep_menu"))
         return m
+
+    def months_markup(cur):
+        """Айлар 3×4 тор түринде: ● усы ай, ✏️ план айлары."""
+        markup = telebot.types.InlineKeyboardMarkup(row_width=3)
+        markup.add(telebot.types.InlineKeyboardButton(
+            f"📅 {cur.year} жыллық Excel есабы", callback_data=f"yearxlsx_{cur.year}"))
+        buttons = []
+        for month_num in range(1, 13):
+            month_str = f"{cur.year}-{month_num:02d}"
+            short = MONTHS_SHORT[month_num]
+            if month_num < cur.month:
+                label = short
+            elif month_num == cur.month:
+                label = f"● {short}"
+            else:
+                label = f"✏️ {short}"
+            buttons.append(telebot.types.InlineKeyboardButton(label, callback_data=f"rep_{month_str}"))
+        markup.add(*buttons)
+        return markup
+
+    def send_period_menu(chat_id):
+        bot.send_message(chat_id,
+                         "📊 <b>Есап дәўирин таңла:</b>\n<i>● — усы ай   ✏️ — план айлары</i>",
+                         reply_markup=months_markup(uz_now()), parse_mode='HTML')
 
     @bot.message_handler(func=lambda m: m.text == "📊 Есап")
     def report_period(message):
-        cur = uz_now()
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton(
-            f"📅 {cur.year} жыллық толық Excel есабы", callback_data=f"yearxlsx_{cur.year}"
-        ))
-        for month_num in range(1, 13):
-            year = cur.year
-            month_str = f"{year}-{month_num:02d}"
-            if month_num < cur.month:
-                label = f"📅 {MONTHS_RU[month_num]} {year}"
-            elif month_num == cur.month:
-                label = f"📅 {MONTHS_RU[month_num]} {year} ← бул ай"
-            else:
-                label = f"✏️ {MONTHS_RU[month_num]} {year} — план"
-            markup.add(telebot.types.InlineKeyboardButton(
-                label, callback_data=f"rep_{month_str}"
-            ))
-        bot.send_message(message.chat.id, "Есап дәўирин таңла:", reply_markup=markup)
+        send_period_menu(message.chat.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data == "rep_menu")
+    def report_menu_cb(call):
+        bot.answer_callback_query(call.id)
+        send_period_menu(call.message.chat.id)
 
     @bot.callback_query_handler(func=lambda call: re.fullmatch(r"rep_\d{4}-\d{2}", call.data) is not None)
     def show_report(call):
@@ -102,6 +120,7 @@ def register_report_handlers(bot):
         markup.add(telebot.types.InlineKeyboardButton(
             "📊 Диаграмма көриу", callback_data=f"chartrep_{date_filter}"
         ))
+        markup.add(telebot.types.InlineKeyboardButton("📅 Барлық айлар", callback_data="rep_menu"))
 
         bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode='HTML')
 
@@ -120,7 +139,7 @@ def register_report_handlers(bot):
             for _, name, amount, _ in stats["fixed"]:
                 labeled.append((f"{name}", float(amount)))
         else:
-            # Өткен/ағымдағы айда тек нағыз төленгени диаграммаға киреди
+            # Өткен/усы айда тек нағыз төленгени диаграммаға киреди
             for name, amount in stats["paid_credits"]:
                 labeled.append((name, float(amount)))
             for name, amount in stats["paid_fixed"]:
