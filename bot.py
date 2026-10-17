@@ -44,7 +44,39 @@ def webhook():
         notify_admins(bot, ADMIN_IDS, "Webhook", e)
     return 'OK', 200
 
+# Төменги кнопкалар орнына Telegram дың «Меню» түймеси (командалар) қолланылады.
+# Ески төменги кнопкаларды қайтарғыңыз келсе: Render → Environment: USE_REPLY_KEYBOARD=1
+USE_REPLY_KEYBOARD = os.getenv("USE_REPLY_KEYBOARD", "0") == "1"
+
+USER_COMMANDS = [
+    ("home", "🏠 Баслапқы бет"),
+    ("income", "➕ Кирис қосыў"),
+    ("expense", "➖ Харажат қосыў"),
+    ("report", "📊 Есап"),
+    ("cancel", "❌ Бийкар етиў"),
+    ("start", "🚀 Ботты иске түсириў"),
+]
+ADMIN_COMMANDS = USER_COMMANDS[:4] + [
+    ("settings", "⚙️ Өзгертиў"),
+    ("backup", "📦 Резерв көширме"),
+] + USER_COMMANDS[4:]
+
+
+def setup_commands():
+    """Telegram «Меню» дизимин қояды: ҳәммеге — қарапайым, админлерге — қосымша командалар."""
+    T = telebot.types
+    bot.set_my_commands([T.BotCommand(c, d) for c, d in USER_COMMANDS], scope=T.BotCommandScopeDefault())
+    for admin_id in ADMIN_IDS:
+        try:
+            bot.set_my_commands([T.BotCommand(c, d) for c, d in ADMIN_COMMANDS],
+                                scope=T.BotCommandScopeChat(admin_id))
+        except Exception as e:
+            print(f"⚠️ Админ {admin_id} ушын меню қойылмады (бот пенен бир рет /start баспаған болыўы мүмкин): {e}")
+
+
 def main_menu():
+    if not USE_REPLY_KEYBOARD:
+        return telebot.types.ReplyKeyboardRemove()   # ески төменги кнопкаларды өширеди
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("🏠 Баслапқы бет")
     markup.row("➕ Кирис", "➖ Харажат")
@@ -88,6 +120,7 @@ def manual_backup(message):
     buf = generate_backup()
     bot.send_document(message.chat.id, buf, caption="📦 Дерекқордың толық резерв көширмеси (JSON)")
 
+@bot.message_handler(commands=["home"])
 @bot.message_handler(func=lambda m: m.text == "🏠 Баслапқы бет")
 def dashboard(message):
     bot.send_chat_action(message.chat.id, 'typing')
@@ -113,11 +146,12 @@ def settings_markup():
     return markup
 
 def back_to_settings():
-    """Өзгертиўден кейин «⚙️ Өзгертиў» мәзирине қайтыў түймеси."""
+    """Өзгертиўден кейин «⚙️ Өзгертиў» менюга қайтыў түймеси."""
     markup = telebot.types.InlineKeyboardMarkup()
     markup.add(telebot.types.InlineKeyboardButton("🔙 Артқа", callback_data="back_settings"))
     return markup
 
+@bot.message_handler(commands=["settings"])
 @bot.message_handler(func=lambda m: m.text == "⚙️ Өзгертиў")
 def settings(message):
     if not is_admin(message.from_user.id):
@@ -167,7 +201,7 @@ def cat_limit_name(message):
     if not category:
         bot.send_message(message.chat.id, "❌ Категория аты бос болмасын!")
         return
-    msg = bot.send_message(message.chat.id, f"💰 {category} ушын айлық лимит суммасын жаз (сум):\nМысалы: 2000000\n(лимитти өшириў ушын: 0)")
+    msg = bot.send_message(message.chat.id, f"💰 {category} ушын айлық лимит сумасын жаз (сум):\nМысалы: 2000000\n(лимитти өшириў ушын: 0)")
     bot.register_next_step_handler(msg, with_cancel(bot, cat_limit_amount), category)
 
 def cat_limit_amount(message, category):
@@ -426,6 +460,11 @@ register_report_handlers(bot)
 start_scheduler(bot, ADMIN_IDS)
 
 if __name__ == "__main__":
+    try:
+        setup_commands()
+        print("✅ Меню командалары қойылды")
+    except Exception as e:
+        print(f"⚠️ Меню командалары қойылмады: {e}")
     bot.remove_webhook()
     bot.set_webhook(url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
     print(f"✅ Webhook орнатылды: {WEBHOOK_URL}/{BOT_TOKEN}")
