@@ -4,6 +4,7 @@ from common import with_cancel, uz_now
 
 def register_budget_handlers(bot):
 
+    @bot.message_handler(commands=["income"])
     @bot.message_handler(func=lambda m: m.text in ("➕ Кирис", "➕ Бюджет қосыў"))
     def budget_source(message):
         markup = telebot.types.InlineKeyboardMarkup()
