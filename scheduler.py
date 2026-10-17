@@ -7,7 +7,7 @@ from backup import generate_backup
 from common import is_allowed, uz_now
 from apscheduler.events import EVENT_JOB_ERROR
 from alerts import notify_admins
-from summary import get_month_stats, format_month_text, get_arrears, month_label
+from summary import get_month_stats, format_morning_text, get_arrears, month_label
 
 UZ_TZ = timezone("Asia/Tashkent")
 
@@ -52,7 +52,7 @@ def morning_summary(bot):
     users = [u for (u,) in c.fetchall() if is_allowed(u)]
     conn.close()
 
-    text = "🌅 <b>Қайырлы таң!</b>\n\n" + format_month_text(stats, today)
+    text = format_morning_text(stats, today)
 
     for telegram_id in users:
         try:
