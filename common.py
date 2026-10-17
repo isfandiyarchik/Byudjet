@@ -81,7 +81,9 @@ def extract_sender(update_dict):
 # instead of being swallowed and misread as an amount/name/etc.
 CANCEL_TRIGGERS = {
     "🏠 Баслапқы бет",
-    "➕ Бюджет қосыў",
+    "➕ Кирис",
+    "➖ Харажат",
+    "➕ Бюджет қосыў",   # ески түйме атлары (телефонда ески клавиатура қалған болса)
     "➕ Харажат қосыў",
     "📊 Есап",
     "⚙️ Өзгертиў",
