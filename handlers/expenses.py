@@ -1,5 +1,6 @@
 from database import get_conn, get_category_limit, get_credits_for_month, get_fixed_for_month
 from summary import get_available, get_arrears, get_month_stats, month_label
+import html
 import re
 import telebot
 from common import is_admin, with_cancel, uz_now
@@ -235,7 +236,10 @@ def register_expense_handlers(bot):
 
     def save_other_expense(message, category, telegram_id):
         try:
-            amount = float(message.text.replace(",", "").replace(" ", ""))
+            # «-3000» деп жазса да харажат 3000 болады (минус белгиси есапқа алынбайды)
+            amount = float(message.text.replace(",", "").replace(" ", "").lstrip("-−–+"))
+            if amount <= 0:
+                raise ValueError
             month = uz_now().strftime("%Y-%m")
             conn = get_conn()
             c = conn.cursor()
@@ -262,9 +266,13 @@ def register_expense_handlers(bot):
             c.execute("SELECT COALESCE(SUM(amount),0) FROM other_expenses WHERE category=%s AND created_at LIKE %s",
                       (category, f"{month}%"))
             category_month_total = float(c.fetchone()[0])
+            available_after = get_available(month, conn)   # жазылғаннан кейинги қалдық
             conn.close()
 
-            bot.send_message(message.chat.id, f"✅ {category}: -{amount:,.0f} сум қосылды!")
+            bot.send_message(message.chat.id,
+                             f"✅ {html.escape(category)}: <b>-{amount:,.0f} сум</b> қосылды!\n"
+                             f"💰 Қолда бар: <b>{available_after:,.0f} сум</b>",
+                             parse_mode='HTML')
 
             limit = get_category_limit(category)
             if limit is not None and category_month_total > limit:
