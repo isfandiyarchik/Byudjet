@@ -22,7 +22,7 @@ MONTHS_RU = {
 def register_report_handlers(bot):
 
     def back_markup(date_filter):
-        """Өзгертиўден кейин: сол ай есабына ҳәм айлар тизимине қайтыў."""
+        """Өзгертиўден кейин: сол ай есабына ҳәм айлар дизимине қайтыў."""
         m = telebot.types.InlineKeyboardMarkup()
         m.add(telebot.types.InlineKeyboardButton(
             f"🔙 {date_filter} есабына қайтыў", callback_data=f"rep_{date_filter}"))
@@ -140,7 +140,7 @@ def register_report_handlers(bot):
             for _, name, amount, _ in stats["fixed"]:
                 labeled.append((f"{name}", float(amount)))
         else:
-            # Өткен/ағымдағы айда тек нағыз төленгени диаграммаға киреди
+            # Өткен/усы айда тек нағыз төленгени диаграммаға киреди
             for name, amount in stats["paid_credits"]:
                 labeled.append((name, float(amount)))
             for name, amount in stats["paid_fixed"]:
@@ -461,7 +461,9 @@ def register_report_handlers(bot):
 
     def fao_amount(message, category, date_filter):
         try:
-            amount = float(message.text.replace(",", "").replace(" ", ""))
+            amount = float(message.text.replace(",", "").replace(" ", "").lstrip("-−–+"))
+            if amount <= 0:
+                raise ValueError
             conn = get_conn()
             c = conn.cursor()
             created_at = f"{date_filter}-01 00:00:00"
