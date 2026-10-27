@@ -1,4 +1,6 @@
+import html
 from database import get_conn
+from summary import get_available
 import telebot
 from common import with_cancel, uz_now
 
@@ -28,14 +30,20 @@ def register_budget_handlers(bot):
 
     def save_budget(message, source, telegram_id):
         try:
-            amount = float(message.text.replace(",", "").replace(" ", ""))
+            amount = float(message.text.replace(",", "").replace(" ", "").lstrip("+"))
+            if amount <= 0:
+                raise ValueError
             conn = get_conn()
             c = conn.cursor()
             c.execute(
                 "INSERT INTO budget (telegram_id, source, amount, created_at) VALUES (%s,%s,%s,%s)",
                 (telegram_id, source, amount, str(uz_now())))
             conn.commit()
+            available_after = get_available(uz_now().strftime("%Y-%m"), conn)
             conn.close()
-            bot.send_message(message.chat.id, f"✅ {source}: +{amount:,.0f} сум қосылды!")
+            bot.send_message(message.chat.id,
+                             f"✅ {html.escape(source)}: <b>+{amount:,.0f} сум</b> қосылды!\n"
+                             f"💰 Қолда бар: <b>{available_after:,.0f} сум</b>",
+                             parse_mode='HTML')
         except ValueError:
-            bot.send_message(message.chat.id, "❌ Қате! Тек сан жазың. Мысалы: 500000")
+            bot.send_message(message.chat.id, "❌ Қате! Оң сан жазың. Мысалы: 500000")
